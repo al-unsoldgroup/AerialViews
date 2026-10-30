@@ -5,16 +5,19 @@ import android.location.Address
 import android.location.Geocoder
 import android.os.Build
 import androidx.annotation.RequiresApi
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.util.LinkedHashMap
 import java.util.Locale
+import java.util.concurrent.Executors
 import kotlin.coroutines.resume
 
 object GeocoderHelper {
     private const val MAX_CACHE_ENTRIES = 500
+    private val legacyExecutor =
+        Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "frame-geocoder").apply { isDaemon = true }
+        }
 
     data class GeocodedLocation(
         val city: String?,
@@ -22,14 +25,10 @@ object GeocoderHelper {
         val country: String?,
     )
 
-    private data class CacheEntry(
-        val value: GeocodedLocation?,
-    )
-
     private val cacheLock = Any()
     private val cache =
-        object : LinkedHashMap<String, CacheEntry>(MAX_CACHE_ENTRIES + 1, 0.75f, true) {
-            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CacheEntry>?): Boolean = size > MAX_CACHE_ENTRIES
+        object : LinkedHashMap<String, GeocodedLocation>(MAX_CACHE_ENTRIES + 1, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, GeocodedLocation>?): Boolean = size > MAX_CACHE_ENTRIES
         }
 
     suspend fun reverseGeocode(
@@ -39,12 +38,12 @@ object GeocoderHelper {
     ): GeocodedLocation? {
         val key = cacheKey(latitude, longitude)
         synchronized(cacheLock) {
-            cache[key]?.let { return it.value }
+            cache[key]?.let { return it }
         }
 
         val result = reverseGeocodeUncached(context, latitude, longitude)
-        synchronized(cacheLock) {
-            cache[key] = CacheEntry(result)
+        if (result != null) {
+            synchronized(cacheLock) { cache[key] = result }
         }
         return result
     }
@@ -111,13 +110,19 @@ object GeocoderHelper {
         latitude: Double,
         longitude: Double,
     ): Address? =
-        withContext(Dispatchers.IO) {
-            try {
-                geocoder.getFromLocation(latitude, longitude, 1)?.firstOrNull()
-            } catch (e: Exception) {
-                Timber.e(e, "Reverse geocoding failed")
-                null
-            }
+        suspendCancellableCoroutine { continuation ->
+            val future =
+                legacyExecutor.submit {
+                    val result =
+                        try {
+                            geocoder.getFromLocation(latitude, longitude, 1)?.firstOrNull()
+                        } catch (_: Exception) {
+                            Timber.w("Reverse geocoding failed")
+                            null
+                        }
+                    if (continuation.isActive) continuation.resume(result)
+                }
+            continuation.invokeOnCancellation { future.cancel(true) }
         }
 
     private fun toGeocodedLocation(address: Address): GeocodedLocation? {

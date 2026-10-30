@@ -1,5 +1,6 @@
 package com.neilturner.aerialviews.ui.settings
 
+import android.content.Context
 import android.os.Bundle
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -9,6 +10,7 @@ import com.neilturner.aerialviews.R
 import com.neilturner.aerialviews.data.AerialDatabase
 import com.neilturner.aerialviews.data.PlaylistCacheRepository
 import com.neilturner.aerialviews.data.PlaylistStateEntity
+import com.neilturner.aerialviews.models.prefs.FrameRotationPrefs
 import com.neilturner.aerialviews.models.prefs.GeneralPrefs
 import com.neilturner.aerialviews.services.TimeOfDayHelper
 import com.neilturner.aerialviews.ui.controls.MenuStateFragment
@@ -37,6 +39,16 @@ class CacheFragment : MenuStateFragment() {
     }
 
     private fun setupPreferences() {
+        findPreference<Preference>("restore_frame_photos")?.onPreferenceClickListener =
+            Preference.OnPreferenceClickListener {
+                requireContext()
+                    .getSharedPreferences(FrameRotationPrefs.EXCLUSIONS, Context.MODE_PRIVATE)
+                    .edit()
+                    .clear()
+                    .apply()
+                Toast.makeText(requireContext(), R.string.frame_photos_restored, Toast.LENGTH_SHORT).show()
+                true
+            }
         val clearCachePref = findPreference<Preference>("clear_playlist_cache")
         clearCachePref?.onPreferenceClickListener =
             Preference.OnPreferenceClickListener {

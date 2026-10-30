@@ -21,6 +21,11 @@ import com.neilturner.aerialviews.services.weather.WindSpeedUnit
 object GeneralPrefs : KotprefModel() {
     override val kotprefName = "${context.packageName}_preferences"
 
+    var dashboardUrl by stringPref("", "frame_dashboard_url")
+    var dashboardScheduleStart by stringPref("00:00", "frame_dashboard_start")
+    var dashboardScheduleEnd by stringPref("00:00", "frame_dashboard_end")
+    var frameArtPercent by stringPref("50", "frame_art_percent")
+
     // Overlays - Top
     var slotTopLeft1 by nullableEnumValuePref(OverlayType.EMPTY, "slot_top_left1")
     var slotTopLeft2 by nullableEnumValuePref(OverlayType.EMPTY, "slot_top_left2")
@@ -79,7 +84,7 @@ object GeneralPrefs : KotprefModel() {
     var overlayMetadata1VideosFolderLevel by stringPref("1", "overlay_metadata1_video_folder_levels")
     var overlayMetadata1VideosLocationType by nullableEnumValuePref(LocationType.CITY_COUNTRY, "overlay_metadata1_video_location_type")
 
-    var overlayMetadata1Photos by stringPref("DESCRIPTION,LOCATION,DATE_TAKEN", "overlay_metadata1_photos")
+    var overlayMetadata1Photos by stringPref("PHOTO_CONTEXT,DESCRIPTION,LOCATION,DATE_TAKEN", "overlay_metadata1_photos")
     var overlayMetadata1PhotosFolderLevel by stringPref("1", "overlay_metadata1_photo_folder_levels")
     var overlayMetadata1PhotosLocationType by nullableEnumValuePref(LocationType.CITY_COUNTRY, "overlay_metadata1_photo_location_type")
     var overlayMetadata1PhotosDateType by nullableEnumValuePref(DateType.COMPACT, "overlay_metadata1_photo_date_type")
@@ -92,7 +97,7 @@ object GeneralPrefs : KotprefModel() {
     var overlayMetadata2VideosFolderLevel by stringPref("1", "overlay_metadata2_video_folder_levels")
     var overlayMetadata2VideosLocationType by nullableEnumValuePref(LocationType.CITY_COUNTRY, "overlay_metadata2_video_location_type")
 
-    var overlayMetadata2Photos by stringPref("DESCRIPTION,LOCATION,DATE_TAKEN", "overlay_metadata2_photos")
+    var overlayMetadata2Photos by stringPref("PHOTO_CONTEXT,DESCRIPTION,LOCATION,DATE_TAKEN", "overlay_metadata2_photos")
     var overlayMetadata2PhotosFolderLevel by stringPref("1", "overlay_metadata2_photo_folder_levels")
     var overlayMetadata2PhotosLocationType by nullableEnumValuePref(LocationType.CITY_COUNTRY, "overlay_metadata2_photo_location_type")
     var overlayMetadata2PhotosDateType by nullableEnumValuePref(DateType.COMPACT, "overlay_metadata2_photo_date_type")
@@ -105,7 +110,7 @@ object GeneralPrefs : KotprefModel() {
     var overlayMetadata3VideosFolderLevel by stringPref("1", "overlay_metadata3_video_folder_levels")
     var overlayMetadata3VideosLocationType by nullableEnumValuePref(LocationType.CITY_COUNTRY, "overlay_metadata3_video_location_type")
 
-    var overlayMetadata3Photos by stringPref("DESCRIPTION,LOCATION,DATE_TAKEN", "overlay_metadata3_photos")
+    var overlayMetadata3Photos by stringPref("PHOTO_CONTEXT,DESCRIPTION,LOCATION,DATE_TAKEN", "overlay_metadata3_photos")
     var overlayMetadata3PhotosFolderLevel by stringPref("1", "overlay_metadata3_photo_folder_levels")
     var overlayMetadata3PhotosLocationType by nullableEnumValuePref(LocationType.CITY_COUNTRY, "overlay_metadata3_photo_location_type")
     var overlayMetadata3PhotosDateType by nullableEnumValuePref(DateType.COMPACT, "overlay_metadata3_photo_date_type")
@@ -118,7 +123,7 @@ object GeneralPrefs : KotprefModel() {
     var overlayMetadata4VideosFolderLevel by stringPref("1", "overlay_metadata4_video_folder_levels")
     var overlayMetadata4VideosLocationType by nullableEnumValuePref(LocationType.CITY_COUNTRY, "overlay_metadata4_video_location_type")
 
-    var overlayMetadata4Photos by stringPref("DESCRIPTION,LOCATION,DATE_TAKEN", "overlay_metadata4_photos")
+    var overlayMetadata4Photos by stringPref("PHOTO_CONTEXT,DESCRIPTION,LOCATION,DATE_TAKEN", "overlay_metadata4_photos")
     var overlayMetadata4PhotosFolderLevel by stringPref("1", "overlay_metadata4_photo_folder_levels")
     var overlayMetadata4PhotosLocationType by nullableEnumValuePref(LocationType.CITY_COUNTRY, "overlay_metadata4_photo_location_type")
     var overlayMetadata4PhotosDateType by nullableEnumValuePref(DateType.COMPACT, "overlay_metadata4_photo_date_type")
@@ -152,6 +157,7 @@ object GeneralPrefs : KotprefModel() {
     // Startup + Shutdown
     var showLoadingText by booleanPref(true, "startup_show_loading")
     var startScreensaverOnLaunch by booleanPref(false, "startup_screensaver_on_launch")
+    var startFrameOnBoot by booleanPref(false, "startup_frame_on_boot")
     var loadingTextSize by stringPref("18", "startup_size")
     var loadingTextWeight by stringPref("300", "startup_weight")
 
@@ -254,7 +260,7 @@ object GeneralPrefs : KotprefModel() {
 
     // Playlist - Photos
     var slideshowSpeed by stringPref("30", "slideshow_speed")
-    var photoScalePortrait by nullableEnumValuePref(PhotoScale.CENTER_CROP, "photo_scale_portrait")
+    var photoScalePortrait by nullableEnumValuePref(PhotoScale.FIT_CENTER, "photo_scale_portrait")
     var photoScaleLandscape by nullableEnumValuePref(PhotoScale.CENTER_CROP, "photo_scale_landscape")
     var photoBackgroundBlurEnabled by booleanPref(true, "photo_background_blur_enabled")
     var photoBackgroundBlurOpacity by stringPref("40", "photo_background_blur_opacity")

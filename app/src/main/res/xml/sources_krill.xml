@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:app="http://schemas.android.com/apk/res-auto">
+    <EditTextPreference app:key="krill_library_origin" app:title="@string/krill_library_title" app:summary="@string/krill_library_summary" />
+    <Preference app:key="krill_sign_in" app:title="@string/krill_sign_in" />
+    <Preference app:key="krill_sign_in_delete" app:title="@string/krill_sign_in_delete" app:summary="@string/krill_sign_in_delete_summary" />
+    <Preference app:key="krill_cancel_pending" app:title="@string/krill_cancel_pending" />
+    <Preference app:key="krill_sign_out" app:title="@string/krill_sign_out" />
+</PreferenceScreen>

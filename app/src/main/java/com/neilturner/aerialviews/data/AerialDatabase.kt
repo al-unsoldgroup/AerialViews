@@ -10,9 +10,14 @@ import androidx.sqlite.driver.AndroidSQLiteDriver
 
 @Database(
     entities = [CachedMediaEntity::class, CachedMusicTrackEntity::class, PlaylistStateEntity::class],
-    version = 2,
+    version = 5,
     exportSchema = true,
-    autoMigrations = [AutoMigration(from = 1, to = 2)],
+    autoMigrations = [
+        AutoMigration(
+            from = 1,
+            to = 2,
+        ), AutoMigration(from = 2, to = 3), AutoMigration(from = 3, to = 4), AutoMigration(from = 4, to = 5),
+    ],
 )
 @ColumnTypeConverters(Converters::class)
 abstract class AerialDatabase : RoomDatabase() {

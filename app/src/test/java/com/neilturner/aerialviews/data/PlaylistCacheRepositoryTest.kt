@@ -50,6 +50,33 @@ internal class PlaylistCacheRepositoryTest {
     }
 
     @Test
+    fun `fallback restores only a playlist with matching settings`() =
+        runTest {
+            useCache(media = List(3) { cachedVideo(it, TimeOfDay.UNKNOWN) }, position = 0, hash = "old-hash")
+            assertNull(repository.getCachedPlaylist(TimeOfDayFilter.ALL, requiredSettingsHash = "new-hash"))
+            assertNotNull(repository.getCachedPlaylist(TimeOfDayFilter.ALL, requiredSettingsHash = "old-hash"))
+        }
+
+    @Test
+    fun `photo dimensions survive a cached playlist round trip`() =
+        runTest {
+            val uri = mockk<Uri>(relaxed = true)
+            every { uri.toString() } returns "https://photos.example/photo"
+            val media =
+                AerialMedia(
+                    uri,
+                    type = AerialMediaType.IMAGE,
+                    metadata = AerialMediaMetadata(width = 1800, height = 3000, tags = listOf("Trip", "Penguin")),
+                )
+            repository.cachePlaylist(listOf(media), null, HASH, false)
+
+            val restored = repository.getCachedPlaylist(TimeOfDayFilter.ALL)!!.mediaPlaylist.nextItem()!!
+            assertEquals(1800, restored.metadata.width)
+            assertEquals(3000, restored.metadata.height)
+            assertEquals(listOf("Trip", "Penguin"), restored.metadata.tags)
+        }
+
+    @Test
     fun `cache is valid before the playlist has finished`() =
         runTest {
             useCache(media = List(3) { cachedVideo(it, TimeOfDay.UNKNOWN) }, position = 0)

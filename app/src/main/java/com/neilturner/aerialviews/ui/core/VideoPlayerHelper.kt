@@ -12,6 +12,7 @@ import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
@@ -38,11 +39,28 @@ import com.neilturner.aerialviews.providers.webdav.WebDavHostParser
 import com.neilturner.aerialviews.providers.webdav.defaultPortFor
 import com.neilturner.aerialviews.services.philips.CustomRendererFactory
 import timber.log.Timber
+import java.util.WeakHashMap
 import kotlin.math.ceil
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
 
 object VideoPlayerHelper {
+    private val diagnostics = WeakHashMap<ExoPlayer, Pair<EventLogger, PlaybackDiagnosticsListener>>()
+
+    @OptIn(UnstableApi::class)
+    fun setPrivatePlayback(
+        player: ExoPlayer,
+        privatePlayback: Boolean,
+    ) {
+        val (events, details) = diagnostics[player] ?: return
+        player.removeAnalyticsListener(events)
+        player.removeAnalyticsListener(details)
+        if (!privatePlayback) {
+            player.addAnalyticsListener(events)
+            player.addAnalyticsListener(details)
+        }
+    }
+
     private const val TEN_SECONDS = 10 * 1000
 
     fun toggleAudioTrack(
@@ -143,8 +161,11 @@ object VideoPlayerHelper {
                 .build()
 
         if (prefs.enableLogCapture) {
-            player.addAnalyticsListener(EventLogger())
-            player.addAnalyticsListener(PlaybackDiagnosticsListener(context))
+            val events = EventLogger()
+            val details = PlaybackDiagnosticsListener(context)
+            diagnostics[player] = events to details
+            player.addAnalyticsListener(events)
+            player.addAnalyticsListener(details)
         }
 
         if (prefs.playsVideoAudio) {
@@ -170,7 +191,24 @@ object VideoPlayerHelper {
         media: AerialMedia,
         includeSeparateAudio: Boolean = true,
     ) {
-        val video = createMediaSource(context, MediaItem.fromUri(media.uri), media.source)
+        val privateStream = media.source == AerialMediaSource.KRILL && media.uri.host?.endsWith(".cloudflarestream.com") == true
+        val videoItem =
+            if (privateStream) {
+                MediaItem
+                    .Builder()
+                    .setUri(
+                        media.uri,
+                    ).setMediaId("private-krill-video")
+                    .build()
+            } else {
+                MediaItem.fromUri(media.uri)
+            }
+        val video =
+            if (privateStream) {
+                HlsMediaSource.Factory(DefaultDataSource.Factory(context)).createMediaSource(videoItem)
+            } else {
+                createMediaSource(context, videoItem, media.source)
+            }
         val audioUri = media.audioUri
 
         val mediaSource =
@@ -179,7 +217,7 @@ object VideoPlayerHelper {
                 // audio is the chosen mode, as the muted and background music modes would
                 // download it just to silence it
                 audioUri != null && includeSeparateAudio && GeneralPrefs.playsVideoAudio -> {
-                    Timber.i("Using MergingMediaSource to combine video and audio streams: $audioUri")
+                    Timber.i("Using MergingMediaSource to combine video and audio streams")
                     val audio = createMediaSource(context, MediaItem.fromUri(audioUri), media.source)
                     MergingMediaSource(video, audio)
                 }
@@ -243,7 +281,7 @@ object VideoPlayerHelper {
         AerialMediaSource.RTSP -> {
             RtspMediaSource
                 .Factory()
-                .setDebugLoggingEnabled(true)
+                .setDebugLoggingEnabled(false)
                 .setForceUseRtpTcp(true)
                 .createMediaSource(mediaItem)
         }

@@ -1,45 +1,81 @@
 package com.neilturner.aerialviews.ui.core
 
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.graphics.drawable.Animatable
 import android.graphics.drawable.Drawable
+import android.hardware.display.DisplayManager
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.util.AttributeSet
+import android.view.Display
 import android.widget.FrameLayout
 import android.widget.ImageView
 import androidx.appcompat.widget.AppCompatImageView
+import androidx.exifinterface.media.ExifInterface
 import coil3.ImageLoader
 import coil3.asDrawable
+import coil3.memory.MemoryCache
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
+import coil3.request.CachePolicy
+import coil3.request.Disposable
 import coil3.request.ImageRequest
+import coil3.request.SuccessResult
 import coil3.request.allowHardware
 import com.hierynomus.protocol.transport.TransportException
 import com.hierynomus.smbj.common.SMBRuntimeException
+import com.neilturner.aerialviews.BuildConfig
+import com.neilturner.aerialviews.data.AerialDatabase
 import com.neilturner.aerialviews.models.enums.AerialMediaSource
+import com.neilturner.aerialviews.models.enums.AerialMediaType
 import com.neilturner.aerialviews.models.enums.AspectRatio
 import com.neilturner.aerialviews.models.enums.PhotoScale
 import com.neilturner.aerialviews.models.enums.ProgressBarLocation
 import com.neilturner.aerialviews.models.enums.ProgressBarType
 import com.neilturner.aerialviews.models.prefs.GeneralPrefs
 import com.neilturner.aerialviews.models.videos.AerialMedia
+import com.neilturner.aerialviews.providers.custom.KrillCacheFence
+import com.neilturner.aerialviews.providers.custom.KrillCacheKey
+import com.neilturner.aerialviews.providers.custom.KrillFeed
+import com.neilturner.aerialviews.providers.custom.KrillFrameCache
+import com.neilturner.aerialviews.providers.custom.KrillImageAuthInterceptor
+import com.neilturner.aerialviews.providers.custom.KrillPortraitHistory
+import com.neilturner.aerialviews.providers.custom.KrillPortraitPairing
+import com.neilturner.aerialviews.providers.custom.KrillPrivateFeed
+import com.neilturner.aerialviews.providers.custom.KrillResolutionPolicy
+import com.neilturner.aerialviews.providers.custom.KrillSessionManager
 import com.neilturner.aerialviews.services.InputStreamFetcher
 import com.neilturner.aerialviews.ui.controls.ProgressBarEvent
 import com.neilturner.aerialviews.ui.controls.ProgressState
 import com.neilturner.aerialviews.ui.core.ImagePlayerHelper.buildGifDecoder
 import com.neilturner.aerialviews.ui.core.ImagePlayerHelper.buildOkHttpClient
 import com.neilturner.aerialviews.ui.helpers.BitmapHelper
+import com.neilturner.aerialviews.ui.helpers.ExifMetadata
 import com.neilturner.aerialviews.utils.FirebaseHelper
 import com.neilturner.aerialviews.utils.filename
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import me.kosert.flowbus.GlobalBus
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import timber.log.Timber
 import java.io.BufferedInputStream
 import java.io.InputStream
 import java.io.PushbackInputStream
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.milliseconds
 
 class ImagePlayerView : FrameLayout {
@@ -49,7 +85,6 @@ class ImagePlayerView : FrameLayout {
 
     private var listener: OnImagePlayerEventListener? = null
     private var finishedRunnable = Runnable { listener?.onImageFinished() }
-    private var errorRunnable = Runnable { listener?.onImageError() }
 
     private val ioJob = SupervisorJob()
     private val mainJob = SupervisorJob()
@@ -57,8 +92,56 @@ class ImagePlayerView : FrameLayout {
     private val mainScope = CoroutineScope(Dispatchers.Main + mainJob)
 
     private var pausedTimestamp: Long = 0
+    private var timerStartedAt: Long = 0
     private var totalDuration: Long = 0
     private var remainingDuration: Long = 0
+    private var preload: Disposable? = null
+    private var currentLoad: Disposable? = null
+    private var collageJob: Job? = null
+    private val currentLoadLock = Any()
+
+    @Volatile private var preloadGeneration = 0
+
+    @Volatile private var imageGeneration = 0
+    private var transitionOverlay: FrameLayout? = null
+
+    @Volatile private var currentIsPrivate = false
+    private var foregroundIsPrivate = false
+    private val cacheInvalidation: () -> Unit = {
+        val done = CountDownLatch(1)
+        val clearDisplay =
+            Runnable {
+                try {
+                    preloadGeneration++
+                    preload?.dispose()
+                    preload = null
+                    collageJob?.cancel()
+                    clearTransitionOverlay()
+                    imageLoader.memoryCache?.clear()
+                    blurHelper.cancel()
+                    backgroundImageView.setImageDrawable(null)
+                    if (currentIsPrivate || foregroundIsPrivate) {
+                        stop()
+                        currentIsPrivate = false
+                    }
+                    nativeQuality.clear()
+                } finally {
+                    done.countDown()
+                }
+            }
+        if (Looper.myLooper() == Looper.getMainLooper()) clearDisplay.run() else Handler(Looper.getMainLooper()).post(clearDisplay)
+        if (!done.await(5, TimeUnit.SECONDS)) throw java.io.IOException("Unable to clear private display")
+    }
+
+    private data class NativeDimensions(
+        val width: Int,
+        val height: Int,
+        val exif: ExifMetadata,
+    )
+
+    private val nativeQuality = java.util.concurrent.ConcurrentHashMap<String, NativeDimensions>()
+    private val qualityRequests = Semaphore(2)
+    private val portraitHistory by lazy { KrillPortraitHistory(context) }
 
     /**
      * Two-token sync gate: ensures [runSetupFinishedRunnable] fires only after *both*
@@ -100,32 +183,230 @@ class ImagePlayerView : FrameLayout {
     init {
         addView(backgroundImageView)
         addView(foregroundImageView)
+        KrillFrameCache.addInvalidationListener(cacheInvalidation)
     }
 
     fun release() {
+        KrillFrameCache.removeInvalidationListener(cacheInvalidation)
+        imageGeneration++
+        collageJob?.cancel()
+        synchronized(currentLoadLock) {
+            currentLoad?.dispose()
+            currentLoad = null
+        }
+        preloadGeneration++
+        preload?.dispose()
+        clearTransitionOverlay()
         ioJob.cancel()
         mainJob.cancel()
         removeCallbacks(finishedRunnable)
-        removeCallbacks(errorRunnable)
         listener = null
+    }
+
+    private val imageClient by lazy {
+        val refreshClient = OkHttpClient()
+        buildOkHttpClient()
+            .newBuilder()
+            .addNetworkInterceptor(
+                KrillImageAuthInterceptor {
+                    val session = KrillSessionManager(context).session(refreshClient)
+                    session?.let { it.libraryOrigin to it.accessToken }
+                },
+            ).build()
     }
 
     private val imageLoader =
         ImageLoader
             .Builder(context)
-            .memoryCache(null)
+            .memoryCache { MemoryCache.Builder().maxSizePercent(context, 0.1).build() }
+            .diskCache { KrillFrameCache.get(context) }
             // .logger(logger)
             .components {
-                add(OkHttpNetworkFetcherFactory(buildOkHttpClient()))
+                add(OkHttpNetworkFetcherFactory(imageClient))
                 add(InputStreamFetcher.Factory())
                 add(buildGifDecoder())
             }.build()
 
+    /** Warm the next Krill image without changing the currently displayed photo. */
+    fun preloadNext(media: AerialMedia?) {
+        preloadGeneration++
+        val generation = preloadGeneration
+        preload?.dispose()
+        preload = null
+        if (media?.source != AerialMediaSource.KRILL || media.type != AerialMediaType.IMAGE) return
+        if (isPrivateKrillImage(media)) {
+            ioScope.launch {
+                val suitable =
+                    qualityRequests.withPermit {
+                        generation == preloadGeneration && runCatching { hasDisplayResolution(media) }.getOrDefault(false)
+                    }
+                if (suitable && generation == preloadGeneration) {
+                    mainScope.launch {
+                        if (generation == preloadGeneration) preloadResolved(media, generation)
+                    }
+                }
+            }
+            return
+        }
+        preloadResolved(media, generation)
+    }
+
+    private fun preloadResolved(
+        media: AerialMedia,
+        generation: Int,
+    ) {
+        val access = if (isPrivateKrillImage(media)) acquirePrivateAccess(media) ?: return else null
+        var handedOff = false
+        try {
+            val privateKey = access?.first
+            val (width, height) = resolveTargetSize()
+            val request =
+                ImageRequest
+                    .Builder(context.applicationContext)
+                    .data(stripCredentialsForCoil(media))
+                    .apply {
+                        if (privateKey != null) {
+                            diskCacheKey(privateKey)
+                            memoryCacheKey(privateKey)
+                            if (forceOfflineForTest()) networkCachePolicy(CachePolicy.DISABLED)
+                        }
+                    }.size(width, height)
+                    .allowHardware(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || !GeneralPrefs.photoBackgroundBlurEnabled)
+                    .listener(
+                        onSuccess = { _, result ->
+                            if (generation == preloadGeneration && (access?.second?.isValid() != false)) {
+                                Timber.d("Krill image preload completed")
+                                val cropUrl =
+                                    runCatching {
+                                        val (targetWidth, targetHeight) = resolveTargetSize()
+                                        KrillFeed.cropForDimensions(
+                                            media.uri.toString(),
+                                            media.metadata.width ?: result.image.width,
+                                            media.metadata.height ?: result.image.height,
+                                            targetWidth,
+                                            targetHeight,
+                                            privateSmartCrop = isPrivateCropEnabled(media),
+                                        )
+                                    }.getOrNull()
+                                if (cropUrl != null) {
+                                    val cropAccess = if (access != null) acquirePrivateAccess(media, cropUrl) else null
+                                    if (access == null || cropAccess != null) {
+                                        var cropHandedOff = false
+                                        try {
+                                            val cropRequest =
+                                                ImageRequest
+                                                    .Builder(context.applicationContext)
+                                                    .data(cropUrl)
+                                                    .apply {
+                                                        cropAccess?.first?.let { key ->
+                                                            diskCacheKey(key)
+                                                            memoryCacheKey(key)
+                                                        }
+                                                        if (cropAccess != null &&
+                                                            forceOfflineForTest()
+                                                        ) {
+                                                            networkCachePolicy(CachePolicy.DISABLED)
+                                                        }
+                                                    }.size(width, height)
+                                                    .allowHardware(
+                                                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ||
+                                                            !GeneralPrefs.photoBackgroundBlurEnabled,
+                                                    ).build()
+                                            preload = enqueueTracked(cropRequest, cropAccess?.second)
+                                            cropHandedOff = true
+                                        } finally {
+                                            if (!cropHandedOff) cropAccess?.second?.close()
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                    ).build()
+            preload = enqueueTracked(request, access?.second)
+            handedOff = true
+        } finally {
+            if (!handedOff) access?.second?.close()
+        }
+    }
+
+    /** Keep the current photo visible until the next image has finished loading. */
+    fun beginPhotoTransition(): Boolean {
+        val current = foregroundImageView.drawable ?: return false
+        clearTransitionOverlay()
+        removeCallbacks(finishedRunnable)
+        val overlay = FrameLayout(context)
+        val background = backgroundImageView.drawable
+        if (backgroundImageView.visibility == VISIBLE && background != null) {
+            overlay.addView(
+                ImageView(context).apply {
+                    layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+                    scaleType = backgroundImageView.scaleType
+                    setImageDrawable(background)
+                },
+            )
+        }
+        overlay.addView(
+            ImageView(context).apply {
+                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+                scaleType = foregroundImageView.scaleType
+                setImageDrawable(current)
+            },
+        )
+        addView(overlay, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        transitionOverlay = overlay
+        return true
+    }
+
+    fun finishPhotoTransition(duration: Long) {
+        val overlay = transitionOverlay ?: return
+        overlay
+            .animate()
+            .alpha(0f)
+            .setDuration(duration)
+            .withEndAction {
+                if (transitionOverlay === overlay) clearTransitionOverlay()
+            }.start()
+    }
+
+    private fun clearTransitionOverlay() {
+        transitionOverlay?.let {
+            it.animate().cancel()
+            removeView(it)
+        }
+        transitionOverlay = null
+    }
+
     fun setImage(media: AerialMedia) {
+        collageJob?.cancel()
+        pausedTimestamp = 0
+        timerStartedAt = 0
+        remainingDuration = 0
+        val generation = ++imageGeneration
+        currentIsPrivate = isPrivateKrillImage(media)
+        synchronized(currentLoadLock) {
+            currentLoad?.dispose()
+            currentLoad = null
+        }
         ioScope.launch {
+            if (isPrivateKrillImage(media)) {
+                val suitable =
+                    qualityRequests.withPermit {
+                        generation == imageGeneration && runCatching { hasDisplayResolution(media) }.getOrDefault(false)
+                    }
+                if (generation != imageGeneration) return@launch
+                if (!suitable) {
+                    Timber.i("Skipping Krill image without sufficient source resolution")
+                    onPlayerError(generation)
+                    return@launch
+                }
+            }
             val baseStream = ImagePlayerHelper.streamFromMedia(context, media)
+            if (generation != imageGeneration) {
+                baseStream?.close()
+                return@launch
+            }
             if (baseStream == null) {
-                loadImage(media, stripCredentialsForCoil(media))
+                loadImage(media, stripCredentialsForCoil(media), generation)
                 return@launch
             }
 
@@ -133,7 +414,7 @@ class ImagePlayerView : FrameLayout {
                 (media.source == AerialMediaSource.IMMICH) ||
                 (media.source == AerialMediaSource.NCMEMORIES)
             ) {
-                loadImage(media, baseStream)
+                loadImage(media, baseStream, generation)
                 return@launch
             }
 
@@ -147,9 +428,13 @@ class ImagePlayerView : FrameLayout {
             try {
                 val headerBytes = ByteArray(BitmapHelper.HEADER_BUFFER_SIZE)
                 val headerLength = readUpTo(stream, headerBytes, headerBytes.size)
+                if (generation != imageGeneration) {
+                    stream.close()
+                    return@launch
+                }
                 if (headerLength <= 0) {
                     stream.close()
-                    loadImage(media, stripCredentialsForCoil(media))
+                    loadImage(media, stripCredentialsForCoil(media), generation)
                     return@launch
                 }
                 stream.unread(headerBytes, 0, headerLength)
@@ -168,35 +453,377 @@ class ImagePlayerView : FrameLayout {
                     "ImagePlayerView: Extracted EXIF in ${System.currentTimeMillis() - totalStartTime}ms...",
                 )
 
-                loadImage(media, stream)
+                loadImage(media, stream, generation)
             } catch (e: TransportException) {
                 Timber.e(e, "SMB transport dropped while reading image header")
                 stream.close()
-                onPlayerError()
+                onPlayerError(generation)
             } catch (e: SMBRuntimeException) {
                 Timber.e(e, "SMB runtime error while reading image header")
                 stream.close()
-                onPlayerError()
+                onPlayerError(generation)
             } catch (e: Exception) {
                 Timber.e(e, "Unexpected error reading image stream")
                 stream.close()
-                onPlayerError()
+                onPlayerError(generation)
             }
         }
     }
 
+    /** Load both photos before replacing the current slide. Each private request is fenced through completion. */
+    internal fun canPairPortraits(
+        first: AerialMedia,
+        second: AerialMedia,
+    ): Boolean {
+        if (!isPrivateKrillImage(first) || !isPrivateKrillImage(second)) return false
+        val (width, height) = resolveTargetSize()
+
+        fun candidate(media: AerialMedia) =
+            KrillPortraitPairing.Photo(
+                media.uri.toString(),
+                media.metadata.width,
+                media.metadata.height,
+                media.metadata.albumName,
+                pairingTags(media),
+            )
+        return KrillPortraitPairing.choosePartner(candidate(first), listOf(candidate(second)), width / 2, height) != null
+    }
+
+    internal suspend fun probePortraitPair(
+        first: AerialMedia,
+        second: AerialMedia,
+    ): Boolean {
+        if (!isPrivateKrillImage(first) || !isPrivateKrillImage(second)) return false
+        val (width, height) = resolveTargetSize()
+        val panel = width / 2 to height
+        return withContext(Dispatchers.IO) {
+            try {
+                hasDisplayResolution(first, panel, fitInside = true) &&
+                    hasDisplayResolution(second, panel, fitInside = true) && canPairPortraits(first, second)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
+
+    internal fun setPortraitPair(
+        first: AerialMedia,
+        second: AerialMedia,
+    ) {
+        collageJob?.cancel()
+        removeCallbacks(finishedRunnable)
+        pausedTimestamp = 0
+        timerStartedAt = 0
+        remainingDuration = 0
+        val generation = ++imageGeneration
+        currentIsPrivate = true
+        synchronized(currentLoadLock) {
+            currentLoad?.dispose()
+            currentLoad = null
+        }
+        collageJob =
+            mainScope.launch {
+                var firstAccess: Pair<String, KrillCacheFence.Lease>? = null
+                var secondAccess: Pair<String, KrillCacheFence.Lease>? = null
+                try {
+                    val access1 = acquirePrivateAccess(first) ?: throw IllegalStateException("Private photo unavailable")
+                    firstAccess = access1
+                    val access2 = acquirePrivateAccess(second) ?: throw IllegalStateException("Private photo unavailable")
+                    secondAccess = access2
+                    val job = currentCoroutineContext()[Job]!!
+                    access1.second.onCancel { job.cancel() }
+                    access2.second.onCancel { job.cancel() }
+                    val (width, height) = resolveTargetSize()
+                    val panel = (width / 2) to height
+                    val pair =
+                        withContext(Dispatchers.IO) {
+                            check(hasDisplayResolution(first, panel, fitInside = true)) { "First portrait is too small" }
+                            check(hasDisplayResolution(second, panel, fitInside = true)) { "Second portrait is too small" }
+
+                            fun candidate(media: AerialMedia) =
+                                KrillPortraitPairing.Photo(
+                                    media.uri.toString(),
+                                    media.metadata.width,
+                                    media.metadata.height,
+                                    media.metadata.albumName,
+                                    pairingTags(media),
+                                )
+                            check(
+                                KrillPortraitPairing.choosePartner(
+                                    candidate(first),
+                                    listOf(candidate(second)),
+                                    panel.first,
+                                    panel.second,
+                                ) !=
+                                    null,
+                            ) {
+                                "Photos are not compatible portraits"
+                            }
+
+                            suspend fun load(
+                                media: AerialMedia,
+                                key: String,
+                            ): SuccessResult {
+                                val request =
+                                    ImageRequest
+                                        .Builder(context.applicationContext)
+                                        .data(stripCredentialsForCoil(media))
+                                        .diskCacheKey(key)
+                                        .memoryCacheKey(key)
+                                        .apply { if (forceOfflineForTest()) networkCachePolicy(CachePolicy.DISABLED) }
+                                        .size(panel.first, panel.second)
+                                        .allowHardware(true)
+                                        .build()
+                                return imageLoader.execute(request) as? SuccessResult ?: throw java.io.IOException("Portrait unavailable")
+                            }
+                            load(first, access1.first) to load(second, access2.first)
+                        }
+                    if (generation != imageGeneration || !access1.second.isValid() || !access2.second.isValid()) return@launch
+                    val firstSize = PortraitCollageLayout.Size(first.metadata.width ?: 0, first.metadata.height ?: 0)
+                    val secondSize = PortraitCollageLayout.Size(second.metadata.width ?: 0, second.metadata.height ?: 0)
+                    val drawable =
+                        PortraitCollageDrawable(
+                            pair.first.image.asDrawable(resources),
+                            pair.second.image.asDrawable(resources),
+                            firstSize,
+                            secondSize,
+                        )
+                    blurHelper.update(null)
+                    foregroundIsPrivate = true
+                    foregroundImageView.scaleType = ImageView.ScaleType.FIT_XY
+                    setForegroundDrawable(drawable)
+                    Timber.d("Portrait pair displayed")
+                    setupFinishedRunnable()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    if (generation == imageGeneration) {
+                        Timber.d("Portrait pair unavailable; loading first photo")
+                        listener?.onPortraitPairFailed()
+                        setImage(first)
+                    }
+                } finally {
+                    firstAccess?.second?.close()
+                    secondAccess?.second?.close()
+                }
+            }
+    }
+
+    private fun isPrivateKrillImage(media: AerialMedia): Boolean = KrillPrivateFeed.isFrameImage(media.uri.toString())
+
+    private fun pairingTags(media: AerialMedia): List<String> =
+        if (BuildConfig.DEBUG &&
+            context
+                .getSharedPreferences("frame_debug", Context.MODE_PRIVATE)
+                .getBoolean("ignore_pair_tags_for_test", false)
+        ) {
+            emptyList()
+        } else {
+            media.metadata.tags
+        }
+
+    private fun acquirePrivateAccess(
+        media: AerialMedia,
+        requestUrl: String = media.uri.toString(),
+    ): Pair<String, KrillCacheFence.Lease>? {
+        val session = runCatching { KrillSessionManager(context).cachedSession() }.getOrNull() ?: return null
+        if (!KrillPrivateFeed.isSelectedImage(media.uri.toString(), session.libraryOrigin, session.spaceId)) return null
+        if (!KrillPrivateFeed.isSelectedImage(requestUrl, session.libraryOrigin, session.spaceId) ||
+            !KrillPrivateFeed.sameFramePhoto(media.uri.toString(), requestUrl)
+        ) {
+            return null
+        }
+        val lease = KrillFrameCache.fence.acquire(session.cacheNamespace) ?: return null
+        return KrillCacheKey.forImage(session.cacheNamespace, requestUrl) to lease
+    }
+
+    private fun isPrivateCropEnabled(media: AerialMedia): Boolean =
+        runCatching {
+            val session = KrillSessionManager(context).cachedSession() ?: return@runCatching false
+            KrillPrivateFeed.isSelectedImage(media.uri.toString(), session.libraryOrigin, session.spaceId) &&
+                com.neilturner.aerialviews.providers.custom.KrillCropCapability
+                    .enabled(context, session.cacheNamespace)
+        }.getOrDefault(false)
+
+    private fun enqueueTracked(
+        request: ImageRequest,
+        lease: KrillCacheFence.Lease?,
+    ): Disposable {
+        try {
+            val disposable = imageLoader.enqueue(request)
+            lease?.onCancel { disposable.dispose() }
+            disposable.job.invokeOnCompletion { lease?.close() }
+            return disposable
+        } catch (error: Exception) {
+            lease?.close()
+            throw error
+        }
+    }
+
+    /** Read the original JPEG header before Coil samples the image for the screen. */
+    private fun hasDisplayResolution(
+        media: AerialMedia,
+        target: Pair<Int, Int>? = null,
+        fitInside: Boolean? = null,
+    ): Boolean {
+        val session = KrillSessionManager(context).cachedSession() ?: return false
+        if (!KrillPrivateFeed.isSelectedImage(media.uri.toString(), session.libraryOrigin, session.spaceId)) return false
+        val lease = KrillFrameCache.fence.acquire(session.cacheNamespace) ?: return false
+        return try {
+            hasDisplayResolutionWithLease(media, session.cacheNamespace, lease, target, fitInside)
+        } finally {
+            lease.close()
+        }
+    }
+
+    private fun hasDisplayResolutionWithLease(
+        media: AerialMedia,
+        namespace: String,
+        lease: KrillCacheFence.Lease,
+        target: Pair<Int, Int>? = null,
+        fitInside: Boolean? = null,
+    ): Boolean {
+        val cacheKey = KrillCacheKey.forImage(namespace, media.uri.toString())
+        val (targetWidth, targetHeight) = target ?: resolveTargetSize()
+        val key = "$cacheKey|$targetWidth|$targetHeight|$fitInside|${GeneralPrefs.photoScalePortrait}|${GeneralPrefs.photoScaleLandscape}"
+        nativeQuality[key]?.let {
+            persistMissingDimensions(media, it, lease)
+            return applyNativeResolution(media, it, targetWidth, targetHeight, fitInside)
+        }
+        val cache = KrillFrameCache.get(context)
+        val snapshot = cache.openSnapshot(cacheKey)
+        val cachedResult =
+            snapshot?.use { entry ->
+                runCatching {
+                    entry.data
+                        .toFile()
+                        .inputStream()
+                        .use { readNativeResolution(it) }
+                }.getOrNull()
+            }
+        if (snapshot != null && cachedResult == null) cache.remove(cacheKey)
+        val result =
+            cachedResult ?: run {
+                if (forceOfflineForTest()) throw java.io.IOException("Network disabled for cache test")
+                val request = Request.Builder().url(media.uri.toString()).build()
+                val call = imageClient.newCall(request)
+                lease.onCancel { call.cancel() }
+                call.execute().use { response ->
+                    if (!response.isSuccessful) throw java.io.IOException("Krill image unavailable")
+                    response.body.byteStream().use { readNativeResolution(it) }
+                }
+            }
+        persistMissingDimensions(media, result, lease)
+        if (nativeQuality.size >= 1024) nativeQuality.clear()
+        nativeQuality[key] = result
+        return applyNativeResolution(media, result, targetWidth, targetHeight, fitInside)
+    }
+
+    private fun persistMissingDimensions(
+        media: AerialMedia,
+        dimensions: NativeDimensions,
+        lease: KrillCacheFence.Lease,
+    ) {
+        if (GeneralPrefs.playlistCache && lease.isValid() && ((media.metadata.width ?: 0) <= 0 || (media.metadata.height ?: 0) <= 0)) {
+            runCatching {
+                runBlocking(Dispatchers.IO) {
+                    AerialDatabase.getInstance(context).playlistCacheDao().updateMissingKrillDimensions(
+                        media.uri.toString(),
+                        dimensions.width,
+                        dimensions.height,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun readNativeResolution(stream: InputStream): NativeDimensions {
+        val header = ByteArray(4 * 1024 * 1024)
+        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        var length = 0
+        while (length < header.size && options.outWidth <= 0) {
+            val end = minOf(length + BitmapHelper.HEADER_BUFFER_SIZE, header.size)
+            while (length < end) {
+                val count = stream.read(header, length, end - length)
+                if (count < 0) break
+                if (count == 0) break
+                length += count
+            }
+            BitmapFactory.decodeByteArray(header, 0, length, options)
+            if (length < end) break
+        }
+        if (options.outWidth <= 0 || options.outHeight <= 0) throw java.io.IOException("Image dimensions unavailable")
+        val exif = BitmapHelper.extractExifMetadataFromHeader(header, length)
+        Timber.d("Krill EXIF available: date=${exif.date != null}, location=${exif.latitude != null && exif.longitude != null}")
+        val orientation = exif.orientation
+        val rotated =
+            orientation in
+                setOf(
+                    ExifInterface.ORIENTATION_ROTATE_90,
+                    ExifInterface.ORIENTATION_ROTATE_270,
+                    ExifInterface.ORIENTATION_TRANSPOSE,
+                    ExifInterface.ORIENTATION_TRANSVERSE,
+                )
+        val width = if (rotated) options.outHeight else options.outWidth
+        val height = if (rotated) options.outWidth else options.outHeight
+        return NativeDimensions(width, height, exif)
+    }
+
+    private fun applyNativeResolution(
+        media: AerialMedia,
+        dimensions: NativeDimensions,
+        targetWidth: Int,
+        targetHeight: Int,
+        fitInsideOverride: Boolean?,
+    ): Boolean {
+        media.metadata.width = dimensions.width
+        media.metadata.height = dimensions.height
+        KrillPhotoMetadata.applyExif(media.metadata.exif, dimensions.exif)
+        val fitInside =
+            fitInsideOverride ?: (resolveForegroundScaleType(dimensions.width, dimensions.height) == ImageView.ScaleType.FIT_CENTER)
+        val suitable = KrillResolutionPolicy.isSuitable(dimensions.width, dimensions.height, targetWidth, targetHeight, fitInside)
+        Timber.d("Krill source ${dimensions.width}x${dimensions.height}; display ${targetWidth}x$targetHeight; suitable=$suitable")
+        return suitable || (fitInsideOverride == null && useNativeBorder(media))
+    }
+
+    private fun useNativeBorder(media: AerialMedia): Boolean {
+        if (!isPrivateKrillImage(media)) return false
+        val session = runCatching { KrillSessionManager(context).cachedSession() }.getOrNull() ?: return false
+        if (!KrillPrivateFeed.isSelectedImage(media.uri.toString(), session.libraryOrigin, session.spaceId)) return false
+        return portraitHistory.useNativeBorder(session.cacheNamespace, media.uri.toString())
+    }
+
+    private fun forceOfflineForTest(): Boolean =
+        BuildConfig.DEBUG && context.getSharedPreferences("frame_debug", Context.MODE_PRIVATE).getBoolean("force_offline", false)
+
     private fun loadImage(
         media: AerialMedia,
         data: Any?,
+        generation: Int,
+        cropFallback: Boolean = false,
     ) {
         // Errors from the actual async network/disk load are delivered via onError, not here.
+        var lease: KrillCacheFence.Lease? = null
+        var handedOff = false
         try {
+            val requestUrl = if (cropFallback) data as? String ?: return else media.uri.toString()
+            val access = if (isPrivateKrillImage(media)) acquirePrivateAccess(media, requestUrl) ?: return else null
+            lease = access?.second
+            val privateKey = access?.first
             val (targetWidth, targetHeight) = resolveTargetSize()
             val request =
                 ImageRequest
-                    .Builder(context)
+                    .Builder(context.applicationContext)
                     .data(data)
-                    .size(targetWidth, targetHeight)
+                    .apply {
+                        if (privateKey != null) {
+                            diskCacheKey(privateKey)
+                            memoryCacheKey(privateKey)
+                            if (forceOfflineForTest()) networkCachePolicy(CachePolicy.DISABLED)
+                        }
+                    }.size(targetWidth, targetHeight)
                     // The pre-S blurred background is a CPU bitmap operation. Coil hardware
                     // bitmaps cannot be drawn into the software canvas used by Drawable.toBitmap().
                     .allowHardware(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || !GeneralPrefs.photoBackgroundBlurEnabled)
@@ -205,22 +832,71 @@ class ImagePlayerView : FrameLayout {
                             // resetImageTransforms()
                         },
                         onSuccess = { image ->
-                            val drawable = image.asDrawable(resources)
-                            blurHelper.update(drawable.takeIf { shouldShowBlurBackground(media, it) })
-                            setForegroundDrawable(drawable)
+                            if (generation == imageGeneration && (access?.second?.isValid() != false)) {
+                                val drawable = image.asDrawable(resources)
+                                blurHelper.update(drawable.takeIf { shouldShowBlurBackground(media, it) })
+                                foregroundIsPrivate = isPrivateKrillImage(media)
+                                setForegroundDrawable(drawable)
+                            }
                         },
                     ).listener(
-                        onSuccess = { _, result ->
-                            setScaleMode(result.image.width, result.image.height)
+                        onSuccess = success@{ _, result ->
+                            if (generation != imageGeneration || access?.second?.isValid() == false) return@success
+                            if (media.source == AerialMediaSource.KRILL) {
+                                Timber.d("Krill image loaded from ${result.dataSource}")
+                            }
+                            setScaleMode(result.image.width, result.image.height, media)
+                            if (media.source == AerialMediaSource.KRILL && !cropFallback) {
+                                val cropUrl =
+                                    runCatching {
+                                        KrillFeed.cropForDimensions(
+                                            media.uri.toString(),
+                                            media.metadata.width ?: result.image.width,
+                                            media.metadata.height ?: result.image.height,
+                                            targetWidth,
+                                            targetHeight,
+                                            privateSmartCrop = isPrivateCropEnabled(media),
+                                        )
+                                    }.getOrNull()
+                                if (cropUrl != null) {
+                                    Timber.d("Krill smart crop selected after measuring photo")
+                                    loadImage(media, cropUrl, generation, cropFallback = true)
+                                    return@success
+                                }
+                            }
                             setupFinishedRunnable()
                         },
-                        onError = { _, result ->
-                            handleImageError(result.throwable)
+                        onError = error@{ _, result ->
+                            if (generation != imageGeneration || access?.second?.isValid() == false) return@error
+                            if (cropFallback) {
+                                if (access != null || media.source == AerialMediaSource.KRILL || media.source == AerialMediaSource.CUSTOM) {
+                                    Timber.w("Private smart crop unavailable; showing original photo")
+                                } else {
+                                    Timber.w(result.throwable, "Smart crop unavailable; showing original photo")
+                                }
+                                setupFinishedRunnable()
+                            } else {
+                                handleImageError(result.throwable, generation, media)
+                            }
                         },
                     ).build()
-            imageLoader.enqueue(request)
+            synchronized(currentLoadLock) {
+                if (generation == imageGeneration) {
+                    currentLoad = enqueueTracked(request, access?.second)
+                    handedOff = true
+                } else if (data is InputStream) {
+                    data.close()
+                    access?.second?.close()
+                } else {
+                    access?.second?.close()
+                }
+            }
         } catch (ex: Exception) {
-            Timber.e(ex, "Exception while trying to load image: ${ex.message}")
+            if (media.source == AerialMediaSource.KRILL || media.source == AerialMediaSource.CUSTOM || isPrivateKrillImage(media)) {
+                Timber.w("Private or custom image load failed")
+            } else {
+                Timber.e(ex, "Exception while trying to load image: ${ex.message}")
+            }
 
             if (data is InputStream) {
                 try {
@@ -230,7 +906,9 @@ class ImagePlayerView : FrameLayout {
                 }
             }
 
-            listener?.onImageError()
+            if (generation == imageGeneration) post { if (generation == imageGeneration) listener?.onImageError() }
+        } finally {
+            if (!handedOff) lease?.close()
         }
     }
 
@@ -303,35 +981,70 @@ class ImagePlayerView : FrameLayout {
     }
 
     private fun resolveTargetSize(): Pair<Int, Int> {
+        val mode =
+            (context.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager)
+                ?.getDisplay(Display.DEFAULT_DISPLAY)
+                ?.mode
+        if (mode != null && mode.physicalWidth > 0 && mode.physicalHeight > 0) {
+            return Pair(mode.physicalWidth, mode.physicalHeight)
+        }
         val width = if (this.width > 0) this.width else resources.displayMetrics.widthPixels
         val height = if (this.height > 0) this.height else resources.displayMetrics.heightPixels
         return Pair(width, height)
     }
 
-    private fun handleImageError(throwable: Throwable) {
-        Timber.e(throwable, "Exception while loading image: ${throwable.message}")
-        FirebaseHelper.crashlyticsException(throwable)
+    internal fun portraitPanelSize(): Pair<Int, Int> {
+        val (width, height) = resolveTargetSize()
+        return width / 2 to height
+    }
 
-        onPlayerError()
+    private fun handleImageError(
+        throwable: Throwable,
+        generation: Int,
+        media: AerialMedia,
+    ) {
+        if (media.source == AerialMediaSource.KRILL || media.source == AerialMediaSource.CUSTOM || isPrivateKrillImage(media)) {
+            Timber.w("Private or custom image load failed")
+        } else {
+            Timber.e(throwable, "Exception while loading image: ${throwable.message}")
+            FirebaseHelper.crashlyticsException(throwable)
+        }
+
+        onPlayerError(generation)
     }
 
     fun stop() {
+        imageGeneration++
+        collageJob?.cancel()
+        synchronized(currentLoadLock) {
+            currentLoad?.dispose()
+            currentLoad = null
+        }
+        clearTransitionOverlay()
         removeCallbacks(finishedRunnable)
         setForegroundDrawable(null)
+        foregroundIsPrivate = false
         pausedTimestamp = 0
+        timerStartedAt = 0
         remainingDuration = 0
         blurHelper.cancel()
     }
 
     fun pauseTimer() {
-        pausedTimestamp = System.currentTimeMillis()
+        if (pausedTimestamp > 0 || timerStartedAt == 0L) return
+        pausedTimestamp = SystemClock.elapsedRealtime()
+        remainingDuration = maxOf(0, remainingDuration - (pausedTimestamp - timerStartedAt))
         removeCallbacks(finishedRunnable)
     }
 
-    fun resumeTimer(pauseDuration: Long) {
+    internal fun stopTimerForTransition() {
+        removeCallbacks(finishedRunnable)
+    }
+
+    fun resumeTimer() {
         if (pausedTimestamp > 0) {
-            remainingDuration = maxOf(0, remainingDuration - pauseDuration)
             if (remainingDuration > 0) {
+                timerStartedAt = SystemClock.elapsedRealtime()
                 postDelayed(finishedRunnable, remainingDuration)
             } else {
                 // If time has expired, finish immediately
@@ -344,8 +1057,10 @@ class ImagePlayerView : FrameLayout {
     private fun setScaleMode(
         width: Int,
         height: Int,
+        media: AerialMedia,
     ) {
-        foregroundImageView.scaleType = resolveForegroundScaleType(width, height)
+        foregroundImageView.scaleType =
+            if (useNativeBorder(media)) ImageView.ScaleType.CENTER_INSIDE else resolveForegroundScaleType(width, height)
     }
 
     private fun resolveForegroundScaleType(
@@ -387,6 +1102,7 @@ class ImagePlayerView : FrameLayout {
 
         totalDuration = duration
         remainingDuration = durationMinusFade
+        timerStartedAt = SystemClock.elapsedRealtime()
 
         Timber.i("Delay: ${durationMinusFade.milliseconds}")
         if (progressBar) GlobalBus.post(ProgressBarEvent(ProgressState.START, 0, duration))
@@ -401,11 +1117,15 @@ class ImagePlayerView : FrameLayout {
         }
     }
 
-    private fun onPlayerError() {
-        removeCallbacks(finishedRunnable)
+    private fun onPlayerError(generation: Int) {
         // Notify immediately; the single error backoff is applied by
         // ScreenController.handleError(). Delaying here too would double it.
-        post(errorRunnable)
+        post {
+            if (generation == imageGeneration) {
+                removeCallbacks(finishedRunnable)
+                listener?.onImageError()
+            }
+        }
     }
 
     fun setOnPlayerListener(listener: ScreenController) {
@@ -416,6 +1136,8 @@ class ImagePlayerView : FrameLayout {
         fun onImageFinished()
 
         fun onImageError()
+
+        fun onPortraitPairFailed()
 
         fun onImagePrepared()
     }

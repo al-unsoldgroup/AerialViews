@@ -22,6 +22,11 @@ data class AerialMediaMetadata(
     var exif: AerialExifMetadata = AerialExifMetadata(),
     var albumName: String = "",
     var title: String = "",
+    var width: Int? = null,
+    var height: Int? = null,
+    var tags: List<String> = emptyList(),
+    var tagsKnown: Boolean = false,
+    var pairedWithNext: Boolean? = null,
 )
 
 data class AerialExifMetadata(

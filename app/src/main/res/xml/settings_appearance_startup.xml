@@ -5,6 +5,11 @@
         <PreferenceCategory app:title="@string/category_startup">
                 <CheckBoxPreference
                     app:defaultValue="false"
+                    app:key="startup_frame_on_boot"
+                    app:title="@string/frame_start_on_boot"
+                    app:summary="@string/frame_start_on_boot_summary" />
+                <CheckBoxPreference
+                    app:defaultValue="false"
                     app:key="startup_screensaver_on_launch"
                     app:title="@string/appearance_screensaver_on_launch_title"
                     app:summary="@string/appearance_screensaver_on_launch_summary" />
@@ -23,6 +28,18 @@
                     app:key="startup_show_loading"
                     app:title="@string/appearance_loading_show_title"
                     app:summary="@string/appearance_loading_show_summary" />
+        </PreferenceCategory>
+
+        <PreferenceCategory app:title="@string/frame_dashboard_title">
+                <EditTextPreference app:key="frame_dashboard_url" app:title="@string/frame_dashboard_url" app:summary="@string/frame_dashboard_url_summary" />
+                <EditTextPreference app:defaultValue="00:00" app:key="frame_dashboard_start" app:title="@string/frame_dashboard_start" app:summary="@string/frame_dashboard_time_summary" />
+                <EditTextPreference app:defaultValue="00:00" app:key="frame_dashboard_end" app:title="@string/frame_dashboard_end" app:summary="@string/frame_dashboard_time_summary" />
+        </PreferenceCategory>
+
+        <PreferenceCategory app:title="@string/frame_modes_title">
+                <ListPreference app:key="frame_art_percent" app:title="@string/frame_art_percent"
+                    app:defaultValue="50" app:entries="@array/frame_art_percent_entries"
+                    app:entryValues="@array/frame_art_percent_values" app:useSimpleSummaryProvider="true" />
         </PreferenceCategory>
 
         <PreferenceCategory app:title="@string/category_typography">

@@ -2,12 +2,40 @@ package com.neilturner.aerialviews.utils
 
 import com.neilturner.aerialviews.data.network.UrlValidator
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import timber.log.Timber
 
 @DisplayName("UrlValidator Tests")
 internal class UrlValidatorTest {
+    @Test
+    fun `invalid private URL does not appear in logs or parser errors`() {
+        val messages = mutableListOf<String>()
+        val tree =
+            object : Timber.Tree() {
+                override fun log(
+                    priority: Int,
+                    tag: String?,
+                    message: String,
+                    t: Throwable?,
+                ) {
+                    messages.add(message)
+                    t?.let { messages.add(it.toString()) }
+                }
+            }
+        Timber.plant(tree)
+        try {
+            val secret = "private-test-token"
+            assertEquals(emptyList<String>(), UrlValidator.parseUrls("https://example.com/bad path?token=$secret"))
+            assertTrue(messages.isNotEmpty())
+            assertFalse(messages.any { secret in it })
+        } finally {
+            Timber.uproot(tree)
+        }
+    }
+
     @Test
     @DisplayName("parseUrls handles null input")
     fun parseUrlsHandlesNullInput() {

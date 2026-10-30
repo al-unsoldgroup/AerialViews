@@ -76,9 +76,9 @@ object UrlParser {
             }
 
             return processedUrl
-        } catch (e: Exception) {
-            Timber.e(e, "URL parsing failed: ${e.message}")
-            throw IllegalArgumentException("Invalid URL format: ${e.message}")
+        } catch (_: Exception) {
+            Timber.w("URL parsing failed")
+            throw IllegalArgumentException("Invalid URL format")
         }
     }
 

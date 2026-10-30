@@ -1,15 +1,177 @@
 package com.neilturner.aerialviews.models
 
 import android.net.Uri
+import com.neilturner.aerialviews.models.enums.AerialMediaSource
 import com.neilturner.aerialviews.models.videos.AerialMedia
+import com.neilturner.aerialviews.models.videos.AerialMediaMetadata
+import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertSame
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 internal class MediaPlaylistTest {
+    @Test
+    fun `a failed chunk read preserves playlist size and can be retried`() {
+        val photos = List(60) { testMedia() }
+        var calls = 0
+        val playlist =
+            MediaPlaylist(photos.take(50), startPosition = 2, size = photos.size, fetchChunk = { offset, limit ->
+                if (calls++ == 0) throw java.io.IOException("temporary database failure")
+                photos.drop(offset).take(limit)
+            })
+        assertThrows(MediaPlaylistFetchException::class.java) { playlist.itemAt(55) }
+        assertEquals(60, playlist.size)
+        assertEquals(2, playlist.currentPosition)
+        assertSame(photos[55], playlist.itemAt(55))
+    }
+
+    @Test
+    fun `snapshot projection reads all chunks without moving the playback cursor`() =
+        runTest {
+            val photos = List(120) { testMedia() }
+            val playlist =
+                MediaPlaylist(photos.take(50), startPosition = 10, size = photos.size, fetchChunk = { offset, limit ->
+                    photos.drop(offset).take(limit)
+                })
+            assertEquals(120, playlist.snapshotProjection { it }.size)
+            assertEquals(10, playlist.currentPosition)
+            assertSame(photos[11], playlist.nextItem())
+        }
+
+    @Test
+    fun `repeated window contention keeps the requested position for retry`() {
+        val photos = List(60) { testMedia() }
+        val entered = List(2) { CountDownLatch(1) }
+        val release = List(2) { CountDownLatch(1) }
+        val calls = AtomicInteger()
+        val error = AtomicReference<Throwable?>()
+        val playlist =
+            MediaPlaylist(photos.take(50), startPosition = 54, size = 60, fetchChunk = { offset, limit ->
+                val attempt = calls.getAndIncrement()
+                if (attempt < 2) {
+                    entered[attempt].countDown()
+                    check(release[attempt].await(5, TimeUnit.SECONDS))
+                }
+                photos.drop(offset).take(limit)
+            })
+        val worker =
+            Thread {
+                try {
+                    playlist.nextItem()
+                } catch (exception: Throwable) {
+                    error.set(exception)
+                }
+            }
+        worker.start()
+        repeat(2) { attempt ->
+            assertTrue(entered[attempt].await(5, TimeUnit.SECONDS))
+            playlist.invalidateRefillsAndNeedsCachedMetadata { true }
+            release[attempt].countDown()
+        }
+        worker.join(5000)
+        assertFalse(worker.isAlive)
+        assertTrue(error.get() is MediaPlaylistContentionException)
+        assertEquals(54, playlist.currentPosition)
+        assertSame(photos[55], playlist.nextItem())
+        assertEquals(55, playlist.currentPosition)
+    }
+
+    @Test
+    fun `metadata commit invalidates a stale synchronous window and retries`() {
+        val stale = List(60) { testMedia() }
+        val fresh = List(60) { testMedia() }
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val calls = AtomicInteger()
+        val result = AtomicReference<AerialMedia?>()
+        val playlist =
+            MediaPlaylist(stale.take(50), size = 60, fetchChunk = { offset, limit ->
+                if (calls.incrementAndGet() == 1) {
+                    entered.countDown()
+                    check(release.await(5, TimeUnit.SECONDS))
+                    stale.drop(offset).take(limit)
+                } else {
+                    fresh.drop(offset).take(limit)
+                }
+            })
+        val worker = Thread { result.set(playlist.itemAt(55)) }
+        worker.start()
+        assertTrue(entered.await(5, TimeUnit.SECONDS))
+        playlist.invalidateRefillsAndNeedsCachedMetadata { true }
+        release.countDown()
+        worker.join(5000)
+        assertFalse(worker.isAlive)
+        assertEquals(2, calls.get())
+        assertSame(fresh[55], result.get())
+    }
+
+    @Test
+    fun `metadata refresh updates matching Krill items in the active window without moving position`() {
+        val uri = mockk<Uri>()
+        every { uri.toString() } returns "https://example/photo"
+        val item = AerialMedia(uri, source = AerialMediaSource.KRILL, metadata = AerialMediaMetadata(width = 1100))
+        val update =
+            AerialMedia(
+                uri,
+                source = AerialMediaSource.KRILL,
+                metadata = AerialMediaMetadata(width = 1200, height = 1800, tags = listOf("trip")),
+            )
+        val playlist = MediaPlaylist(listOf(item), startPosition = 0)
+        assertTrue(playlist.invalidateRefillsAndNeedsCachedMetadata { true })
+        assertFalse(playlist.invalidateRefillsAndNeedsCachedMetadata { false })
+        playlist.updateCachedMetadata(listOf(update))
+        update.metadata.shortDescription = "Painting • Artist"
+        playlist.updateCachedCaptions(listOf(update))
+        assertEquals("Painting • Artist", item.metadata.shortDescription)
+        assertEquals(1100, item.metadata.width)
+        assertEquals(1800, item.metadata.height)
+        assertEquals(listOf("trip"), item.metadata.tags)
+        assertFalse(playlist.invalidateRefillsAndNeedsCachedMetadata { true })
+        assertEquals(0, playlist.currentPosition)
+    }
+
+    @Test
+    fun `debug seek starts at the following playlist entry`() {
+        val first = testMedia()
+        val second = testMedia()
+        val playlist = MediaPlaylist(listOf(first, second))
+        playlist.debugSeekTo(0)
+        assertSame(second, playlist.nextItem())
+    }
+
+    @Test
+    fun `inspect an absolute position without changing playback or wrapping invalid indices`() {
+        val first = testMedia()
+        val second = testMedia()
+        val playlist = MediaPlaylist(listOf(first, second), startPosition = 1)
+        assertSame(first, playlist.itemAt(0))
+        assertNull(playlist.itemAt(-1))
+        assertNull(playlist.itemAt(2))
+        assertEquals(1, playlist.currentPosition)
+    }
+
+    @Test
+    fun `peek skips excluded items without changing playback position`() {
+        val first = testMedia()
+        val excluded = testMedia()
+        val next = testMedia()
+        val playlist = MediaPlaylist(listOf(first, excluded, next), startPosition = 0)
+
+        assertSame(next, playlist.peekNextItem { it !== excluded })
+        assertEquals(0, playlist.currentPosition)
+        assertSame(excluded, playlist.nextItem())
+    }
+
     @Test
     fun `nextItem starts after saved current position`() {
         val first = testMedia()

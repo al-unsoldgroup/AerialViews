@@ -10,6 +10,8 @@
 
 A screensaver for Android/Google TV devices and phones including Nvidia Shield, Fire TV, and Google TV Streamer.
 
+This fork is exploring a Krill-powered picture frame. Follow the [build journal](docs/build-journal/builder-journey.md) for the design, experiments, and features still in progress.
+
 Inspired by Apple TV's beautiful video screensaver!
 
 *Please read if you have an [Nvidia Shield](#frequently-asked-questions) or [a recent Google TV device.](#how-to-set-aerial-views-as-the-default-screensaver)*
@@ -719,6 +721,21 @@ https://example.com/photos/forest.webp,"A dense green forest"
 ```
 
 *Note: Wrapping quotes are optional but recommended for descriptions containing commas.*
+
+</details>
+
+<details>
+<summary>Krill public photos</summary>
+&nbsp;
+
+Add a Krill public media endpoint under **Custom Media URLs**, for example
+`https://example.com/api/public/media?type=photo`. Only photos already shared publicly by that
+Krill instance are available. This source does not authenticate to private libraries.
+
+If Cloudflare image transformations are enabled for the domain, append `&frame_crop=auto`
+to request a 16:9 automatic-focus crop for landscape photos. Portrait photos are not cropped by
+that option. Image quality remains limited by the resolution the public Krill instance serves.
+The app's portrait scale setting controls whether portrait photos fill the screen or fit inside it.
 
 </details>
 

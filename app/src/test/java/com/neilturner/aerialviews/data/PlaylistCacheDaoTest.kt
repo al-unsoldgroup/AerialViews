@@ -1,5 +1,7 @@
 package com.neilturner.aerialviews.data
 
+import android.content.Context
+import android.content.SharedPreferences
 import androidx.room3.Room
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import com.neilturner.aerialviews.models.TimeOfDayFilter
@@ -7,9 +9,13 @@ import com.neilturner.aerialviews.models.enums.AerialMediaSource
 import com.neilturner.aerialviews.models.enums.AerialMediaType
 import com.neilturner.aerialviews.models.enums.SceneType
 import com.neilturner.aerialviews.models.enums.TimeOfDay
+import io.mockk.every
+import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
@@ -40,6 +46,217 @@ internal class PlaylistCacheDaoTest {
     fun tearDown() {
         db.close()
     }
+
+    @Test
+    fun `portrait plan keeps filtered resume position and all unpaired items`() =
+        runTest {
+            val context = mockk<Context>()
+            val preferences = mockk<SharedPreferences>(relaxed = true)
+            every { context.applicationContext } returns context
+            every { context.getSharedPreferences(any(), any()) } returns preferences
+            val repository = PlaylistCacheRepository(context, dao, { PlaylistCachePrefs(true, "-1", false) })
+
+            fun privatePhoto(
+                order: Int,
+                id: String,
+            ) = photo(order).copy(
+                source = "KRILL",
+                uri = "https://photos.example/api/frame/media/$id/image?space=mine",
+                width = 1200,
+                height = 1800,
+                tagsJson = "[\"trip\"]",
+            )
+            val rows =
+                listOf(
+                    privatePhoto(0, "seen").copy(pairedWithNext = true),
+                    video(1, TimeOfDay.NIGHT),
+                    photo(2),
+                    privatePhoto(3, "a"),
+                    photo(4).copy(pairedWithNext = true),
+                    privatePhoto(5, "b"),
+                )
+            dao.updateCache(rows, emptyList(), state(7).copy(mediaPosition = 1))
+            val dayFilter = TimeOfDayFilter.forPeriod(TimeOfDay.DAY, emptySet(), emptySet())
+            // A day video ensures the filter stays enabled while the night video is excluded.
+            dao.insertMediaItems(listOf(video(6, TimeOfDay.DAY)))
+            assertTrue(repository.preparePortraitPlan("https://photos.example", "mine", "session", dayFilter, 960, 1080))
+            val result = dao.getAllMediaItemsOrdered()
+            assertEquals(listOf(0, 1, 2), result.take(3).map { it.playlistOrder })
+            assertEquals(true, result[0].pairedWithNext)
+            assertEquals(listOf("a", "b"), result.subList(3, 5).map { it.uri.substringAfter("media/").substringBefore("/") })
+            assertEquals(true, result[3].pairedWithNext)
+            assertEquals(true, result[5].pairedWithNext)
+            assertEquals(1, dao.getPlaylistState()?.mediaPosition)
+            assertEquals(7, result.size)
+        }
+
+    @Test
+    fun `portrait planning protects both halves when saved position is a pair start`() =
+        runTest {
+            val context = mockk<Context>()
+            every { context.applicationContext } returns context
+            every { context.getSharedPreferences(any(), any()) } returns mockk<SharedPreferences>(relaxed = true)
+            val repository = PlaylistCacheRepository(context, dao, { PlaylistCachePrefs(true, "-1", false) })
+
+            fun privatePhoto(
+                order: Int,
+                id: String,
+            ) = photo(order).copy(
+                source = "KRILL",
+                uri = "https://photos.example/api/frame/media/$id/image?space=mine",
+                width = 1200,
+                height = 1800,
+                tagsJson = "[\"trip\"]",
+            )
+            val rows =
+                listOf(
+                    privatePhoto(0, "current").copy(pairedWithNext = true),
+                    privatePhoto(1, "current-partner"),
+                    privatePhoto(2, "future"),
+                    photo(3),
+                    privatePhoto(4, "future-partner"),
+                )
+            dao.updateCache(rows, emptyList(), state(5).copy(mediaPosition = 0))
+            assertTrue(repository.preparePortraitPlan("https://photos.example", "mine", "session", TimeOfDayFilter.ALL, 960, 1080))
+            val result = dao.getAllMediaItemsOrdered()
+            assertEquals(listOf("current", "current-partner"), result.take(2).map { it.uri.substringAfter("media/").substringBefore("/") })
+            assertEquals(true, result[0].pairedWithNext)
+            assertEquals(
+                listOf("future", "future-partner"),
+                result.subList(2, 4).map { it.uri.substringAfter("media/").substringBefore("/") },
+            )
+            assertEquals(0, dao.getPlaylistState()?.mediaPosition)
+        }
+
+    @Test
+    fun `caption refresh preserves rotation and ignores a replaced cache`() =
+        runTest {
+            val image = photo(0).copy(source = "KRILL", shortDescription = "Old")
+            val local = photo(1).copy(uri = image.uri, shortDescription = "Local")
+            val initialState = state(2)
+            dao.updateCache(listOf(image, local), emptyList(), initialState)
+            assertTrue(dao.updateKrillCaptions(initialState.cachedAt, listOf(KrillCaptionUpdate(image.uri, "Painting • Artist"))))
+            val result = dao.getAllMediaItemsOrdered()
+            assertEquals(listOf("Painting • Artist", "Local"), result.map { it.shortDescription })
+            assertEquals(listOf(0, 1), result.map { it.playlistOrder })
+            dao.clearState()
+            dao.insertOrUpdateState(initialState.copy(cachedAt = initialState.cachedAt + 1))
+            assertFalse(dao.updateKrillCaptions(initialState.cachedAt, listOf(KrillCaptionUpdate(image.uri, "Stale"))))
+            assertEquals("Painting • Artist", dao.getAllMediaItemsOrdered().first().shortDescription)
+        }
+
+    @Test
+    fun `portrait plan preserves unrelated metadata and rejects changed planning inputs`() =
+        runTest {
+            dao.updateCache(listOf(photo(0), photo(1)), emptyList(), state(2))
+            val expectedState = dao.getPlaylistState()!!
+            val snapshot = dao.getPortraitPlanRows()
+            val planned = listOf(snapshot[1].copy(playlistOrder = 0), snapshot[0].copy(playlistOrder = 1, pairedWithNext = true))
+            val first = dao.getAllMediaItemsOrdered().first()
+            dao.updateMediaItems(listOf(first.copy(shortDescription = "Updated description")))
+            assertTrue(dao.applyPortraitPlanRows(expectedState, snapshot, planned))
+            assertEquals("Updated description", dao.getAllMediaItemsOrdered().last().shortDescription)
+
+            val nextSnapshot = dao.getPortraitPlanRows()
+            val changed = dao.getAllMediaItemsOrdered().first()
+            dao.updateMediaItems(listOf(changed.copy(width = 1200)))
+            assertFalse(dao.applyPortraitPlanRows(expectedState, nextSnapshot, nextSnapshot))
+        }
+
+    @Test
+    fun `unknown source dimensions remain eligible for later planning`() =
+        runTest {
+            val context = mockk<Context>()
+            val preferences = mockk<SharedPreferences>(relaxed = true)
+            every { context.applicationContext } returns context
+            every { context.getSharedPreferences(any(), any()) } returns preferences
+            every { preferences.contains(any()) } returns true
+            every { preferences.getLong(any(), any()) } answers { System.currentTimeMillis() - 1000 }
+            every { preferences.getLong(match { it.startsWith("timeout:") }, any()) } returns 0L
+            val repository = PlaylistCacheRepository(context, dao, { PlaylistCachePrefs(true, "-1", false) })
+            val unknown =
+                photo(0).copy(
+                    source = "KRILL",
+                    uri = "https://photos.example/api/frame/media/a/image?space=mine",
+                    width = null,
+                    height = null,
+                    tagsJson = "[\"trip\"]",
+                )
+            val partner =
+                unknown.copy(
+                    playlistOrder = 1,
+                    uri = "https://photos.example/api/frame/media/b/image?space=mine",
+                    width = 1200,
+                    height = 1800,
+                )
+            dao.updateCache(listOf(unknown, partner), emptyList(), state(11))
+            assertTrue(repository.preparePortraitPlan("https://photos.example", "mine", "session", TimeOfDayFilter.ALL, 960, 1080))
+            val initial = dao.getAllMediaItemsOrdered()
+            assertEquals(false, initial[0].pairedWithNext)
+            dao.updateMissingKrillDimensions(initial[0].uri, 1200, 1800)
+            assertEquals(null, dao.getAllMediaItemsOrdered()[0].pairedWithNext)
+            assertFalse(repository.preparePortraitPlan("https://photos.example", "mine", "session", TimeOfDayFilter.ALL, 960, 1080))
+            val extra =
+                List(
+                    9,
+                ) { index ->
+                    partner.copy(
+                        id = 0,
+                        playlistOrder = index + 2,
+                        uri = "https://photos.example/api/frame/media/x$index/image?space=mine",
+                    )
+                }
+            dao.insertMediaItems(extra)
+            assertTrue(repository.preparePortraitPlan("https://photos.example", "mine", "session", TimeOfDayFilter.ALL, 960, 1080))
+            assertEquals(true, dao.getAllMediaItemsOrdered()[0].pairedWithNext)
+        }
+
+    @Test
+    fun `stale plan cannot overwrite a changed playback position`() =
+        runTest {
+            dao.updateCache(listOf(photo(0), photo(1)), emptyList(), state(2))
+            val snapshotState = dao.getPlaylistState()!!
+            val snapshot = dao.getAllMediaItemsOrdered()
+            dao.updateMediaPosition(0)
+            assertFalse(
+                dao.applyPortraitPlan(
+                    snapshotState,
+                    snapshot,
+                    snapshot.reversed().mapIndexed {
+                        i,
+                        row,
+                        ->
+                        row.copy(playlistOrder = i)
+                    },
+                ),
+            )
+            assertEquals(snapshot, dao.getAllMediaItemsOrdered())
+        }
+
+    @Test
+    fun `metadata refresh updates only missing matching Krill rows without reordering`() =
+        runTest {
+            val first = photo(0).copy(source = "KRILL", uri = "https://example/one", width = 1200)
+            val second = photo(1).copy(source = "KRILL", uri = "https://example/two", tagsJson = "[\"old\"]")
+            val local = photo(2).copy(uri = "https://example/one")
+            dao.insertMediaItems(listOf(first, second, local))
+            assertEquals(listOf(first.uri), dao.krillUrisMissingTags())
+            assertEquals(listOf(second.uri), dao.unplannedKrillUrisAfter(0))
+            dao.updateKrillMetadataBatch(
+                listOf(
+                    KrillMetadataUpdate(first.uri, null, 1800, "[\"trip\"]"),
+                    KrillMetadataUpdate(second.uri, 500, 500, "[\"new\"]"),
+                ),
+            )
+            val result = dao.getAllMediaItemsOrdered()
+            assertEquals(listOf(0, 1, 2), result.map { it.playlistOrder })
+            assertEquals(1200, result[0].width)
+            assertEquals(1800, result[0].height)
+            assertEquals("[\"trip\"]", result[0].tagsJson)
+            assertEquals("[\"old\"]", result[1].tagsJson)
+            assertEquals(null, result[2].tagsJson)
+            assertEquals(emptyList<String>(), dao.krillUrisMissingTags())
+        }
 
     @Test
     fun `counts match the time-of-day predicate and always include photos`() =

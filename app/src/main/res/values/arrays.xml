@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string-array name="frame_art_percent_entries"><item>0%</item><item>25%</item><item>50%</item><item>75%</item><item>100%</item></string-array>
+    <string-array name="frame_art_percent_values"><item>0</item><item>25</item><item>50</item><item>75</item><item>100</item></string-array>
     <!-- Apple Video Options -->
     <string-array name="apple_videos_quality_entries" translatable="false">
         <item>1080p H.264</item>
@@ -1613,6 +1615,7 @@
     </string-array>
     <string name="overlay_metadata_videos_default" translatable="false">POI</string>
 
+    <string name="overlay_meta_photo_context">Caption, location and date</string>
     <string name="overlay_meta_photo_location">Location (EXIF/Immich/NC Memories)</string>
     <string name="overlay_meta_photo_date">Date taken (EXIF/Immich/NC Memories)</string>
     <string name="overlay_meta_photo_description">Description (EXIF/Immich/NC Memories)</string>
@@ -1621,6 +1624,7 @@
     <string name="overlay_meta_photo_folder_filename">Folder &amp; filename</string>
     <string name="overlay_meta_photo_folder_only">Folder name only</string>
     <string-array name="overlay_metadata_photos_entries" translatable="false">
+        <item>@string/overlay_meta_photo_context</item>
         <item>@string/overlay_meta_photo_location</item>
         <item>@string/overlay_meta_photo_date</item>
         <item>@string/overlay_meta_photo_description</item>
@@ -1630,6 +1634,7 @@
         <item>@string/overlay_meta_photo_folder_only</item>
     </string-array>
     <string-array name="overlay_metadata_photos_values" translatable="false">
+        <item>PHOTO_CONTEXT</item>
         <item>LOCATION</item>
         <item>DATE_TAKEN</item>
         <item>DESCRIPTION</item>
@@ -1638,7 +1643,7 @@
         <item>FOLDER_FILENAME</item>
         <item>FOLDER_ONLY</item>
     </string-array>
-    <string name="overlay_metadata_photos_default" translatable="false">LOCATION,DATE_TAKEN,DESCRIPTION</string>
+    <string name="overlay_metadata_photos_default" translatable="false">PHOTO_CONTEXT,DESCRIPTION,LOCATION,DATE_TAKEN</string>
 
     <string name="overlay_meta_loc_city">City</string>
     <string name="overlay_meta_loc_city_state">City, State</string>

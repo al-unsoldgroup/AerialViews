@@ -15,8 +15,16 @@ import com.neilturner.aerialviews.models.prefs.GeneralPrefs
 import com.neilturner.aerialviews.models.videos.AerialExifMetadata
 import com.neilturner.aerialviews.models.videos.AerialMedia
 import com.neilturner.aerialviews.models.videos.AerialMediaMetadata
+import com.neilturner.aerialviews.providers.custom.KrillPortraitHistory
+import com.neilturner.aerialviews.providers.custom.KrillPortraitPairing
+import com.neilturner.aerialviews.providers.custom.KrillPortraitRotation
+import com.neilturner.aerialviews.providers.custom.KrillPrivateFeed
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import timber.log.Timber
 import kotlin.time.Duration.Companion.days
 
@@ -54,6 +62,114 @@ class PlaylistCacheRepository(
     private val dao: PlaylistCacheDao = AerialDatabase.getInstance(appContext).playlistCacheDao(),
     private val prefsProvider: () -> PlaylistCachePrefs = { PlaylistCachePrefs.current() },
 ) {
+    /** Plan the unplayed part of a cached playlist without changing its filtered resume index. */
+    internal suspend fun preparePortraitPlan(
+        origin: String,
+        space: String,
+        namespace: String,
+        filter: TimeOfDayFilter,
+        panelWidth: Int,
+        panelHeight: Int,
+    ): Boolean =
+        withContext(Dispatchers.IO) {
+            val started = System.nanoTime()
+            val state = dao.getPlaylistState() ?: return@withContext false
+            Timber.d("Portrait plan loaded state in ${(System.nanoTime() - started) / 1_000_000}ms")
+            val history = KrillPortraitHistory(appContext)
+            val matchesImage = KrillPrivateFeed.selectedImageMatcher(origin, space)
+            val selectedImages = mutableMapOf<String, Boolean>()
+
+            fun isSelectedImage(uri: String): Boolean = selectedImages.getOrPut(uri) { matchesImage(uri) }
+            if (history.planTimedOutRecently(namespace, state.cachedAt, System.currentTimeMillis())) return@withContext false
+            val resolvedFilter = resolveFilter(filter)
+            val allowed = resolvedFilter.allowedNames().toSet()
+            val current =
+                if (state.mediaPosition < 0) {
+                    null
+                } else {
+                    dao.getMediaItemsChunkFiltered(allowed.toList(), 1, state.mediaPosition).singleOrNull() ?: return@withContext false
+                }
+            val protectedOrder = (current?.playlistOrder ?: -1) + if (current?.pairedWithNext == true) 1 else 0
+            val unplanned =
+                dao.unplannedKrillUrisAfter(protectedOrder).filter {
+                    isSelectedImage(it)
+                }
+            Timber.d("Portrait plan checked candidates in ${(System.nanoTime() - started) / 1_000_000}ms")
+            if (unplanned.isEmpty()) return@withContext false
+            // Batch newly measured photos so one preload cannot rebuild the rotation at every startup.
+            if (unplanned.size < 10 &&
+                dao.plannedKrillUrisAfter(protectedOrder).any {
+                    isSelectedImage(it)
+                } && history.deferSmallReplan(namespace, state.cachedAt, System.currentTimeMillis())
+            ) {
+                return@withContext false
+            }
+            val media = dao.getPortraitPlanRows()
+            Timber.d("Portrait plan loaded cache in ${(System.nanoTime() - started) / 1_000_000}ms")
+            var protectedThrough = current?.let { saved -> media.indexOfFirst { it.id == saved.id } } ?: -1
+            if (current != null && protectedThrough < 0) return@withContext false
+            if (current?.pairedWithNext == true && protectedThrough < media.lastIndex) protectedThrough++
+            val future =
+                media.drop(protectedThrough + 1).filter {
+                    it.source == AerialMediaSource.KRILL.name && isSelectedImage(it.uri)
+                }
+            if (future.isEmpty() || future.none { it.pairedWithNext == null } || future.any { it.tagsJson == null }) {
+                return@withContext false
+            }
+            val selectedIds = future.map { it.id }.toSet()
+            val items =
+                media.map { item ->
+                    val tags =
+                        if (item.id in selectedIds) {
+                            item.tagsJson?.let { runCatching { Json.decodeFromString<List<String>>(it) }.getOrNull() }
+                        } else {
+                            null
+                        }
+                    val portrait =
+                        if (item.id in selectedIds && item.type == AerialMediaType.IMAGE.name && tags != null) {
+                            KrillPortraitPairing.Photo(item.uri, item.width, item.height, item.albumName, tags)
+                        } else {
+                            null
+                        }
+                    KrillPortraitRotation.Item(item.id.toString(), portrait)
+                }
+            Timber.d("Portrait plan prepared candidates in ${(System.nanoTime() - started) / 1_000_000}ms")
+            val planningJob = currentCoroutineContext()[Job]
+            val plan =
+                KrillPortraitRotation.arrange(items, protectedThrough, panelWidth, panelHeight, checkpoint = {
+                    planningJob?.ensureActive()
+                }) { first, second ->
+                    val firstUrl = first.portrait?.id ?: return@arrange true
+                    val secondUrl = second.portrait?.id ?: return@arrange true
+                    history.isPairRejected(namespace, firstUrl, secondUrl)
+                }
+            Timber.d("Portrait plan selected pairs in ${(System.nanoTime() - started) / 1_000_000}ms")
+            val byId = media.associateBy { it.id.toString() }
+            val planned =
+                plan.items.mapIndexed { index, item ->
+                    val original = byId.getValue(item.identity)
+                    val marker =
+                        if (index <= protectedThrough || original.id !in selectedIds) {
+                            original.pairedWithNext
+                        } else {
+                            index in plan.pairStarts
+                        }
+                    original.copy(playlistOrder = index, pairedWithNext = marker)
+                }
+            planningJob?.ensureActive()
+            val applied = dao.applyPortraitPlanRows(state, media, planned)
+            if (applied) history.clearReplanDelay(namespace, state.cachedAt)
+            Timber.d("Portrait plan applied cache in ${(System.nanoTime() - started) / 1_000_000}ms")
+            applied
+        }
+
+    suspend fun recordPortraitPlanTimeout(namespace: String) =
+        withContext(Dispatchers.IO) {
+            dao.getPlaylistState()?.let { state ->
+                KrillPortraitHistory(appContext).recordPlanTimeout(namespace, state.cachedAt, System.currentTimeMillis())
+            }
+        }
+
     suspend fun isCacheValid(
         settingsHash: String,
         filter: TimeOfDayFilter,
@@ -102,9 +218,13 @@ class PlaylistCacheRepository(
             }
         }
 
-    suspend fun getCachedPlaylist(filter: TimeOfDayFilter): MediaFetchResult? =
+    suspend fun getCachedPlaylist(
+        filter: TimeOfDayFilter,
+        requiredSettingsHash: String? = null,
+    ): MediaFetchResult? =
         withContext(Dispatchers.IO) {
             val state = dao.getPlaylistState() ?: return@withContext null
+            if (requiredSettingsHash != null && state.settingsHash != requiredSettingsHash) return@withContext null
             if (state.totalMediaItems == 0) return@withContext null
 
             val resolvedFilter = resolveFilter(filter)
@@ -211,12 +331,7 @@ class PlaylistCacheRepository(
         filter: TimeOfDayFilter,
     ): List<AerialMedia> =
         withContext(Dispatchers.IO) {
-            try {
-                dao.getMediaItemsChunkFiltered(filter.allowedNames(), limit, offset).map { mapEntityToMedia(it) }
-            } catch (e: Exception) {
-                Timber.e(e, "PlaylistCache: Failed to map chunk")
-                emptyList()
-            }
+            dao.getMediaItemsChunkFiltered(filter.allowedNames(), limit, offset).map { mapEntityToMedia(it) }
         }
 
     /** Number of cached items that match [filter] right now, for the cache status screen. */
@@ -255,6 +370,11 @@ class PlaylistCacheRepository(
                     scene = enumValueOf<SceneType>(entity.scene),
                     albumName = entity.albumName,
                     title = entity.title,
+                    width = entity.width,
+                    height = entity.height,
+                    pairedWithNext = entity.pairedWithNext,
+                    tags = entity.tagsJson?.let { runCatching { Json.decodeFromString<List<String>>(it) }.getOrNull() } ?: emptyList(),
+                    tagsKnown = entity.tagsJson != null,
                     exif =
                         AerialExifMetadata(
                             date = entity.exifDate,
@@ -299,6 +419,10 @@ class PlaylistCacheRepository(
                     exifCountry = m.metadata.exif.country,
                     exifDescription = m.metadata.exif.description,
                     audioUri = m.audioUri?.toString(),
+                    width = m.metadata.width,
+                    height = m.metadata.height,
+                    tagsJson = Json.encodeToString(m.metadata.tags),
+                    pairedWithNext = m.metadata.pairedWithNext,
                 )
             }
 

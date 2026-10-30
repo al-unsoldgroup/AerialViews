@@ -11,8 +11,10 @@ import com.neilturner.aerialviews.models.videos.AerialExifMetadata
 import com.neilturner.aerialviews.models.videos.AerialMedia
 import com.neilturner.aerialviews.models.videos.AerialMediaMetadata
 import com.neilturner.aerialviews.ui.helpers.GeocoderHelper
+import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
@@ -79,6 +81,112 @@ internal class MetadataResolverTest {
             photoDateType = DateType.COMPACT,
             photoDateCustom = "",
         )
+
+    @Test
+    fun `Krill photo caption omits long filename while preserving credit`(): Unit =
+        runTest {
+            val media =
+                createMedia(
+                    type = AerialMediaType.IMAGE,
+                    source = AerialMediaSource.KRILL,
+                    shortDesc =
+                        "2024-Example-Long-Photo-Filename-With-Several-Parts-And-A-Reference-1234567890" +
+                            " • Photographer",
+                )
+            assertEquals("Photographer", resolver.resolve(context, media, defaultPrefs.copy(photoSelection = "DESCRIPTION")).text)
+        }
+
+    @Test
+    fun `photo uses the next selected metadata when geocoding fails`(): Unit =
+        runTest {
+            val media = createMedia(type = AerialMediaType.IMAGE, description = "Known caption")
+            media.metadata.exif.latitude = 41.0
+            media.metadata.exif.longitude = 2.0
+            coEvery { geocoderHelper.reverseGeocode(context, 41.0, 2.0) } returns null
+            val result = resolver.resolve(context, media, defaultPrefs.copy(photoSelection = "LOCATION,DESCRIPTION"))
+            assertEquals("Known caption", result.text)
+        }
+
+    @Test
+    fun `photo shows capture date when geocoding fails`(): Unit =
+        runTest {
+            val media = createMedia(type = AerialMediaType.IMAGE, date = "2020:01:02 12:00:00")
+            media.metadata.exif.latitude = 41.0
+            media.metadata.exif.longitude = 2.0
+            coEvery { geocoderHelper.reverseGeocode(context, 41.0, 2.0) } returns null
+            val prefs =
+                defaultPrefs.copy(
+                    photoSelection = "LOCATION,DATE_TAKEN",
+                    photoDateType = DateType.CUSTOM,
+                    photoDateCustom = "yyyy-MM-dd",
+                )
+            assertEquals("2020-01-02", resolver.resolve(context, media, prefs).text)
+        }
+
+    @Test
+    fun `Krill photo description uses library artwork information`(): Unit =
+        runTest {
+            val media =
+                createMedia(
+                    type = AerialMediaType.IMAGE,
+                    source = AerialMediaSource.KRILL,
+                    shortDesc = "Painting • Artist",
+                    description = "Camera description",
+                )
+            assertEquals("Painting • Artist", resolver.resolve(context, media, defaultPrefs.copy(photoSelection = "DESCRIPTION")).text)
+        }
+
+    @Test
+    fun `Krill photo description falls back to EXIF when library caption is empty`(): Unit =
+        runTest {
+            val media =
+                createMedia(
+                    type = AerialMediaType.IMAGE,
+                    source = AerialMediaSource.KRILL,
+                    shortDesc = " ",
+                    description = "Camera description",
+                )
+            assertEquals("Camera description", resolver.resolve(context, media, defaultPrefs.copy(photoSelection = "DESCRIPTION")).text)
+        }
+
+    @Test
+    fun `photo context combines artwork caption location and capture date`(): Unit =
+        runTest {
+            val media =
+                createMedia(
+                    type = AerialMediaType.IMAGE,
+                    source = AerialMediaSource.KRILL,
+                    shortDesc = "Painting • Artist",
+                    city = "Paris",
+                    country = "France",
+                    date = "2020:01:02 12:00:00",
+                )
+            val prefs =
+                defaultPrefs.copy(
+                    photoSelection = "PHOTO_CONTEXT",
+                    photoLocationType = LocationType.CITY_COUNTRY,
+                    photoDateType = DateType.CUSTOM,
+                    photoDateCustom = "yyyy-MM-dd",
+                )
+            assertEquals("Painting • Artist\nParis, France • 2020-01-02", resolver.resolve(context, media, prefs).text)
+        }
+
+    @Test
+    fun `photo context keeps available fields if geocoding stalls`(): Unit =
+        runTest {
+            val media =
+                createMedia(
+                    type = AerialMediaType.IMAGE,
+                    source = AerialMediaSource.KRILL,
+                    shortDesc = "Painting",
+                    date = "2020:01:02 12:00:00",
+                )
+            media.metadata.exif.latitude = 41.0
+            media.metadata.exif.longitude = 2.0
+            coEvery { geocoderHelper.reverseGeocode(context, 41.0, 2.0) } coAnswers { awaitCancellation() }
+            val prefs = defaultPrefs.copy(photoSelection = "PHOTO_CONTEXT", photoDateType = DateType.CUSTOM, photoDateCustom = "yyyy-MM-dd")
+            assertEquals("Painting\n2020-01-02", resolver.resolve(context, media, prefs).text)
+        }
 
     @Test
     fun `resolve video with POI uses dynamic metadata`(): Unit =

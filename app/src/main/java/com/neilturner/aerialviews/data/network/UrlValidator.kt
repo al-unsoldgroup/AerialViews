@@ -80,7 +80,7 @@ object UrlValidator {
                         if (uri.host != null) {
                             url // Return the RTSP URL as-is if valid
                         } else {
-                            Timber.w("Invalid RTSP URL skipped: $url - no host")
+                            Timber.w("Invalid RTSP URL skipped: no host")
                             null
                         }
                     } else {
@@ -88,7 +88,7 @@ object UrlValidator {
                         UrlParser.parseServerUrl(url)
                     }
                 } catch (e: Exception) {
-                    Timber.w("Invalid URL skipped: $url - ${e.message}")
+                    Timber.w("Invalid URL skipped")
                     null
                 }
             } ?: emptyList()

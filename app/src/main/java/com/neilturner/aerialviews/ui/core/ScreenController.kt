@@ -3,31 +3,55 @@ package com.neilturner.aerialviews.ui.core
 import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
+import androidx.core.net.toUri
 import androidx.core.view.isVisible
+import com.neilturner.aerialviews.BuildConfig
 import com.neilturner.aerialviews.R
 import com.neilturner.aerialviews.data.PlaylistCacheRepository
+import com.neilturner.aerialviews.data.network.NetworkHelper
 import com.neilturner.aerialviews.databinding.AerialActivityBinding
 import com.neilturner.aerialviews.databinding.ImageViewBinding
 import com.neilturner.aerialviews.databinding.OverlayViewBinding
 import com.neilturner.aerialviews.databinding.VideoViewBinding
 import com.neilturner.aerialviews.models.LoadingStatus
 import com.neilturner.aerialviews.models.MediaPlaylist
+import com.neilturner.aerialviews.models.MediaPlaylistContentionException
+import com.neilturner.aerialviews.models.MediaPlaylistFetchException
+import com.neilturner.aerialviews.models.enums.AerialMediaSource
 import com.neilturner.aerialviews.models.enums.AerialMediaType
+import com.neilturner.aerialviews.models.enums.ButtonType
 import com.neilturner.aerialviews.models.enums.DateType
 import com.neilturner.aerialviews.models.enums.LocationType
 import com.neilturner.aerialviews.models.enums.MetadataType
 import com.neilturner.aerialviews.models.enums.OverlayType
 import com.neilturner.aerialviews.models.enums.ProgressBarLocation
 import com.neilturner.aerialviews.models.music.MusicPlaylist
+import com.neilturner.aerialviews.models.prefs.FrameRotationPrefs
 import com.neilturner.aerialviews.models.prefs.GeneralPrefs
 import com.neilturner.aerialviews.models.prefs.SonosPrefs
 import com.neilturner.aerialviews.models.videos.AerialMedia
+import com.neilturner.aerialviews.providers.custom.KrillCachedMetadataRefresh
+import com.neilturner.aerialviews.providers.custom.KrillDeletionRequest
+import com.neilturner.aerialviews.providers.custom.KrillFrameCache
+import com.neilturner.aerialviews.providers.custom.KrillPortraitHistory
+import com.neilturner.aerialviews.providers.custom.KrillPrivateFeed
+import com.neilturner.aerialviews.providers.custom.KrillSessionManager
+import com.neilturner.aerialviews.providers.custom.KrillTokenStore
+import com.neilturner.aerialviews.providers.custom.cancellableKrillClient
+import com.neilturner.aerialviews.providers.custom.deletionKrillClient
+import com.neilturner.aerialviews.providers.custom.runKrillCaptionSchedule
+import com.neilturner.aerialviews.services.CachedPlaylistGate
 import com.neilturner.aerialviews.services.KtorServer
 import com.neilturner.aerialviews.services.MediaService
 import com.neilturner.aerialviews.services.MusicPlayer
@@ -58,16 +82,23 @@ import com.neilturner.aerialviews.ui.overlays.state.OverlayEventBridge
 import com.neilturner.aerialviews.ui.overlays.state.OverlayStateStore
 import com.neilturner.aerialviews.ui.overlays.state.OverlayUiState
 import com.neilturner.aerialviews.utils.DreamTiming
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import me.kosert.flowbus.GlobalBus
 import timber.log.Timber
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -84,9 +115,33 @@ class ScreenController(
     OnImagePlayerEventListener {
     private val mainScope = CoroutineScope(Dispatchers.Main)
     private lateinit var playlist: MediaPlaylist
+    private val playlistGate = CachedPlaylistGate.process
+    private val playlistGateOwner = playlistGate.register()
+    private val screenCacheEpoch = KrillFrameCache.epoch
+    private var playlistBackedByCache = false
     private var overlayHelper: OverlayHelper
     private val resources by lazy { context.resources }
     private var isStopped = false
+    private var dashboardView: android.webkit.WebView? = null
+    private var dashboardWasPaused = false
+    private var dashboardScheduleJob: Job? = null
+    private var lastDashboardScheduleState: Boolean? = null
+    private var dashboardRetryAt = 0L
+    private var dashboardSchedulePending = false
+    private var dashboardManuallyClosed = false
+    private var dashboardMusicPaused = false
+    private var frameModeIndex: FrameModeIndex? = null
+    private var frameModeUris: List<String> = emptyList()
+    private var frameModePreload: AerialMedia? = null
+    private var frameModeMetadataRevision = -1L
+    private var frameModeBuildJob: Job? = null
+    private var frameModeBuildFailures = 0
+    private var frameModeChangeJob: Job? = null
+    private var frameMode = FrameMode.PHOTOS
+    private var frameModeActive = false
+    private var mixedSlide = 0L
+    private val frameModeHistory = FrameModeHistory()
+    private var playlistReadFailures = 0
 
     private var nowPlayingService: NowPlayingService? = null
     private var sonosService: SonosService? = null
@@ -110,14 +165,40 @@ class ScreenController(
     private var canShowOverlays = false
     private var alternate = false
     private var previousItem = false
+    private var currentLoadIsPrevious = false
     private var explicitSkip = false
     private var canSkip = false
     private var isPaused = false
     private var loopUntilSkipped = GeneralPrefs.loopUntilSkipped
-    private var pauseStartTime: Long = 0
     private var sleepTimerJob: Job? = null
+    private var privateVideoJob: Job? = null
     private val metadataJobs = mutableMapOf<OverlayType, Job>()
     private var currentMedia: AerialMedia? = null
+    private var navigationGeneration = 0L
+
+    private data class PortraitSlide(
+        val start: Int,
+        val first: AerialMedia,
+        val second: AerialMedia,
+    )
+
+    private var currentPortraitSlide: PortraitSlide? = null
+    private var dashboardDeferredItem: Pair<AerialMedia, PortraitSlide?>? = null
+    private var dashboardDeferredPrevious: Boolean? = null
+    private val portraitSlidesByEnd = mutableMapOf<Int, PortraitSlide>()
+    private val portraitHistory by lazy { KrillPortraitHistory(context) }
+    private var photoTransition = false
+    private var photoMenu: View? = null
+    private var photoMenuSelection = 2
+    private var ignorePhotoMenuRelease = false
+    private var photoMenuWasPaused = false
+    private var pauseAfterNextImage = false
+    private var photoMenuHasPair = false
+    private var photoMenuIsVideo = false
+    private var deletionTarget: AerialMedia? = null
+    private var deletionNamespace: String? = null
+    private var photoMenuHasDelete = false
+    private val excludedPhotos by lazy { context.getSharedPreferences(FrameRotationPrefs.EXCLUSIONS, Context.MODE_PRIVATE) }
     private var forcedMuteVideo = false
     private var userMutedVideo = !GeneralPrefs.playsVideoAudio
     private val cacheRepository = PlaylistCacheRepository(context)
@@ -149,6 +230,23 @@ class ScreenController(
         private set
     private var scheduledBlackoutJob: Job? = null
     private var wasInScheduledBlackoutWindow: Boolean? = null
+    private val cacheInvalidation: () -> Unit = {
+        val done = CountDownLatch(1)
+        val clearScreen =
+            Runnable {
+                try {
+                    currentMedia = null
+                    currentPortraitSlide = null
+                    portraitSlidesByEnd.clear()
+                    view.visibility = View.GONE
+                    stop()
+                } finally {
+                    done.countDown()
+                }
+            }
+        if (Looper.myLooper() == Looper.getMainLooper()) clearScreen.run() else Handler(Looper.getMainLooper()).post(clearScreen)
+        if (!done.await(5, TimeUnit.SECONDS)) throw java.io.IOException("Unable to clear private overlays")
+    }
 
     init {
         val inflater = LayoutInflater.from(context)
@@ -257,7 +355,35 @@ class ScreenController(
             gradientBottomView.visibility = View.VISIBLE
         }
 
+        KrillFrameCache.addInvalidationListener(cacheInvalidation)
         DreamTiming.mark("screen.built")
+
+        dashboardScheduleJob =
+            mainScope.launch {
+                while (isActive) {
+                    val start = DashboardConfig.parseTime(GeneralPrefs.dashboardScheduleStart.trim())
+                    val end = DashboardConfig.parseTime(GeneralPrefs.dashboardScheduleEnd.trim())
+                    val active = start != null && end != null && DashboardSchedule(start, end).includes(java.time.LocalTime.now())
+                    if (active != lastDashboardScheduleState) {
+                        lastDashboardScheduleState = active
+                        dashboardManuallyClosed = false
+                        dashboardSchedulePending = active
+                        if (!active) closeDashboard()
+                    }
+                    if (active && dashboardSchedulePending && photoMenu == null && canSkip && !blackOutMode) {
+                        dashboardSchedulePending = false
+                        showDashboard()
+                    }
+                    if (active && photoMenu == null && canSkip && !blackOutMode && dashboardView == null && dashboardRetryAt != 0L &&
+                        android.os.SystemClock.elapsedRealtime() >= dashboardRetryAt
+                    ) {
+                        showDashboard()
+                    }
+                    delay(15_000)
+                }
+            }
+
+        mainScope.launch { recoverPendingDeletion() }
 
         mainScope.launch {
             // Launch if we have permission
@@ -282,18 +408,41 @@ class ScreenController(
 
             // Build playlist and start screensaver
             val mediaResult =
-                MediaService(context).fetchMedia { status ->
-                    mainScope.launch {
-                        loadingText.text =
-                            when (status) {
-                                LoadingStatus.RESUMING -> resources.getString(R.string.loading_resuming)
-                                LoadingStatus.BUILDING -> resources.getString(R.string.loading_building)
-                                LoadingStatus.LOADING -> resources.getString(R.string.loading_title)
-                            }
-                        loadingSpinner.visibility = View.VISIBLE
+                playlistGate.load(playlistGateOwner) {
+                    MediaService(
+                        context,
+                        cacheRewriteAllowed = { playlistGate.canRewrite(playlistGateOwner) },
+                        portraitPanelSize = imagePlayer.portraitPanelSize(),
+                    ).fetchMedia { status ->
+                        mainScope.launch {
+                            loadingText.text =
+                                when (status) {
+                                    LoadingStatus.RESUMING -> resources.getString(R.string.loading_resuming)
+                                    LoadingStatus.BUILDING -> resources.getString(R.string.loading_building)
+                                    LoadingStatus.LOADING -> resources.getString(R.string.loading_title)
+                                }
+                            loadingSpinner.visibility = View.VISIBLE
+                        }
                     }
                 }
             playlist = mediaResult.mediaPlaylist
+            playlistBackedByCache = mediaResult.isFromCache
+            buildFrameModeIndex()
+            mainScope.launch {
+                while (isActive) {
+                    delay(30_000)
+                    if (frameModeIndex == null || frameModeMetadataRevision != playlist.metadataRevision) buildFrameModeIndex()
+                }
+            }
+            if (playlistBackedByCache) mainScope.launch { refreshCaptionsWhileActive() }
+            if (BuildConfig.DEBUG) {
+                val prefs = context.getSharedPreferences("frame_debug", Context.MODE_PRIVATE)
+                if (prefs.contains("start_position")) {
+                    val position = prefs.getInt("start_position", -1)
+                    prefs.edit().remove("start_position").apply()
+                    if (position in -1 until playlist.size) playlist.debugSeekTo(position)
+                }
+            }
             DreamTiming.mark("playlist.resolved", "size=${playlist.size};cached=${mediaResult.isFromCache}")
             if (playlist.size > 0) {
                 Timber.i("Playlist size: ${playlist.size}")
@@ -446,7 +595,8 @@ class ScreenController(
         musicPlayer?.onPlaybackFailed = { handleMusicPlaybackFailed() }
         musicPlayer?.createPlayer()
         musicPlayer?.load(resumeIndex)
-        if (blackOutMode) {
+        if (blackOutMode || dashboardView != null) {
+            if (dashboardView != null) dashboardMusicPaused = true
             musicPlayer?.pause()
             Timber.i("MusicPlayer: not starting while blackout is active")
         } else {
@@ -465,14 +615,27 @@ class ScreenController(
         musicPlayer = null
     }
 
-    private fun loadItem(media: AerialMedia) {
+    private fun loadItem(
+        media: AerialMedia,
+        portraitSlide: PortraitSlide? = null,
+    ) {
+        if (dashboardView != null) {
+            dashboardDeferredItem = media to portraitSlide
+            return
+        }
+        privateVideoJob?.cancel()
         // Reset pause state when loading new item
         isPaused = false
-        pauseStartTime = 0
         currentMedia = media
+        currentPortraitSlide = portraitSlide
         overlayStateStore.resetForNextMedia()
 
-        if (media.uri.toString().contains("smb://")) {
+        if (media.source in setOf(AerialMediaSource.KRILL, AerialMediaSource.CUSTOM, AerialMediaSource.HLS, AerialMediaSource.RTSP) ||
+            KrillPrivateFeed.isFrameImage(media.uri.toString()) ||
+            KrillPrivateFeed.isFrameVideo(media.uri.toString())
+        ) {
+            Timber.i("Loading private or custom media")
+        } else if (media.uri.toString().contains("smb://")) {
             val pattern = Regex("(smb://)([^:]+):([^@]+)@([\\d.]+)/")
             val replacement = "$1****:****@****/"
             val url = pattern.replace(media.uri.toString(), replacement)
@@ -506,14 +669,18 @@ class ScreenController(
 
         // Videos
         if (media.type == AerialMediaType.VIDEO) {
-            videoPlayer.setVideo(media)
+            if (KrillPrivateFeed.isFrameVideo(media.uri.toString())) {
+                playPrivateVideo(media)
+            } else {
+                videoPlayer.setVideo(media)
+            }
             videoViewBinding.root.visibility = View.VISIBLE
             imageViewBinding.root.visibility = View.INVISIBLE
         }
 
         // Images
         if (media.type == AerialMediaType.IMAGE) {
-            imagePlayer.setImage(media)
+            if (portraitSlide == null) imagePlayer.setImage(media) else imagePlayer.setPortraitPair(media, portraitSlide.second)
             imageViewBinding.root.visibility = View.VISIBLE
             videoViewBinding.root.visibility = View.INVISIBLE
         }
@@ -523,7 +690,56 @@ class ScreenController(
             GlobalBus.post(ProgressBarEvent(ProgressState.RESET))
         }
 
-        videoPlayer.start()
+        if (!KrillPrivateFeed.isFrameVideo(media.uri.toString())) videoPlayer.start()
+    }
+
+    private fun playPrivateVideo(media: AerialMedia) {
+        privateVideoJob =
+            mainScope.launch {
+                try {
+                    val playback =
+                        withContext(Dispatchers.IO) {
+                            val job = currentCoroutineContext()[Job]
+                            val manager = KrillSessionManager(context.applicationContext)
+                            val cached = manager.cachedSession() ?: error("Krill login required")
+                            val lease = KrillFrameCache.fence.acquire(cached.cacheNamespace) ?: error("Krill session ended")
+                            try {
+                                lease.onCancel { job?.cancel(CancellationException("Krill session ended")) }
+                                val client = cancellableKrillClient(job)
+                                val session = manager.session(client) { job?.ensureActive() } ?: error("Krill login required")
+                                check(lease.isValid() && session.cacheNamespace == cached.cacheNamespace)
+                                val space = session.spaceId ?: error("Krill library required")
+                                val url =
+                                    KrillPrivateFeed(
+                                        client,
+                                        session.libraryOrigin,
+                                        session.accessToken,
+                                    ).videoPlaybackUrl(media.uri.toString(), space)
+                                job?.ensureActive()
+                                check(lease.isValid())
+                                url
+                            } finally {
+                                lease.close()
+                            }
+                        }
+                    if (isStopped || currentMedia !== media || screenCacheEpoch != KrillFrameCache.epoch ||
+                        !isPrivateMediaAuthorized(media)
+                    ) {
+                        return@launch
+                    }
+                    userMutedVideo = true
+                    videoPlayer.setMuteState(forcedMuteVideo, true)
+                    videoPlayer.setVideo(media.copy(uri = playback.toUri(), source = AerialMediaSource.KRILL, audioUri = null))
+                    videoPlayer.start()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    if (!isStopped && currentMedia === media) {
+                        Timber.w("Private video unavailable")
+                        handleError()
+                    }
+                }
+            }
     }
 
     private fun fadeOutLoadingText() {
@@ -667,8 +883,31 @@ class ScreenController(
     }
 
     private fun fadeOutCurrentItem() {
-        if (!canSkip) return
+        if (!canSkip || dashboardView != null) return
         canSkip = false
+
+        val nextPhoto =
+            if (!previousItem && !loopUntilSkipped) {
+                if (frameModeActive) {
+                    frameModePreload?.takeIf {
+                        frameModeMetadataRevision == playlist.metadataRevision && !isExcludedFromRotation(it)
+                    }
+                } else {
+                    playlist.peekNextItem { !isExcludedFromRotation(it) }
+                }
+            } else {
+                null
+            }
+        if (currentMedia?.source == AerialMediaSource.KRILL && currentMedia?.type == AerialMediaType.IMAGE &&
+            nextPhoto?.source == AerialMediaSource.KRILL && nextPhoto.type == AerialMediaType.IMAGE &&
+            imagePlayer.beginPhotoTransition()
+        ) {
+            photoTransition = true
+            explicitSkip = false
+            isPaused = false
+            loadNextItem()
+            return
+        }
 
         overlayHelper.findOverlay<MetadataOverlay>().forEach {
             it.isFadingOutMedia = true
@@ -696,7 +935,6 @@ class ScreenController(
 
                 // Reset pause state when transitioning between items
                 isPaused = false
-                pauseStartTime = 0
 
                 if (!blackOutMode) {
                     val wasExplicitSkip = explicitSkip
@@ -721,7 +959,7 @@ class ScreenController(
     private fun replayCurrentItem() {
         val media = currentMedia
         if (media != null) {
-            loadItem(media)
+            loadItem(media, currentPortraitSlide)
         } else {
             loadNextItem()
         }
@@ -846,18 +1084,46 @@ class ScreenController(
     }
 
     private fun loadNextItem(previous: Boolean = false) {
+        if (dashboardView != null) {
+            dashboardDeferredPrevious = previous
+            return
+        }
+        val navigation = ++navigationGeneration
+        currentLoadIsPrevious = previous
         if (!this::playlist.isInitialized || playlist.size == 0) {
             Timber.w("ScreenController: Cannot load an item from an empty playlist")
             showLoadingError()
             return
         }
 
-        val media =
-            if (previous) {
-                playlist.previousItem()
-            } else {
-                playlist.nextItem()
+        if (previous) {
+            val start = currentPortraitSlide?.start
+            if (start != null) playlist.restoreCursor(start)
+        }
+        var media: AerialMedia? = null
+        val originalPosition = playlist.currentPosition
+        if (frameModeActive) {
+            selectFrameModeItem(previous, navigation, originalPosition)
+            return
+        }
+        try {
+            for (ignored in 0 until playlist.size) {
+                val candidate = if (previous) playlist.previousItem() else playlist.nextItem()
+                if (candidate == null) break
+                if (!isExcludedFromRotation(candidate)) {
+                    media = candidate
+                    break
+                }
             }
+        } catch (_: MediaPlaylistContentionException) {
+            playlist.restoreCursor(originalPosition)
+            retryPlaylistRead(previous, navigation)
+            return
+        } catch (_: MediaPlaylistFetchException) {
+            playlist.restoreCursor(originalPosition)
+            retryPlaylistRead(previous, navigation)
+            return
+        }
 
         if (media == null) {
             Timber.e("ScreenController: Playlist could not supply an item")
@@ -865,39 +1131,413 @@ class ScreenController(
             return
         }
 
-        loadItem(media)
+        presentSelectedMedia(media, previous, navigation)
     }
 
-    private fun savePlaybackPosition() {
-        if (this::playlist.isInitialized && GeneralPrefs.playlistCache) {
+    private fun retryPlaylistRead(
+        previous: Boolean,
+        navigation: Long,
+    ) {
+        playlistReadFailures++
+        if (playlistReadFailures >= 3) {
+            showLoadingError()
+        }
+        val retryDelay = if (playlistReadFailures >= 3) 30_000L else playlistReadFailures * 1_000L
+        mainScope.launch {
+            delay(retryDelay)
+            if (!isStopped && navigation == navigationGeneration) loadNextItem(previous)
+        }
+    }
+
+    private data class FrameModeChoice(
+        val position: Int,
+        val media: AerialMedia?,
+        val stale: Boolean = false,
+        val fromHistory: Boolean = false,
+    )
+
+    private fun selectFrameModeItem(
+        previous: Boolean,
+        navigation: Long,
+        originalPosition: Int,
+    ) {
+        val index = frameModeIndex
+        if (index == null || frameModeMetadataRevision != playlist.metadataRevision) {
+            if (frameModeBuildFailures >= 3) {
+                showLoadingError()
+                mainScope.launch {
+                    delay(30_000)
+                    if (!isStopped && navigation == navigationGeneration) loadNextItem(previous)
+                }
+                return
+            }
+            buildFrameModeIndex()
             mainScope.launch {
-                Timber.d("PlaylistCache: Saving playback position: ${playlist.currentPosition}")
-                cacheRepository.saveMediaPosition(playlist.currentPosition)
+                delay(2_000)
+                if (!isStopped && navigation == navigationGeneration) loadNextItem(previous)
+            }
+            return
+        }
+        val mode = frameMode
+        val slide = mixedSlide
+        val percent = GeneralPrefs.frameArtPercent.toIntOrNull() ?: 50
+        val uris = frameModeUris
+        val revision = frameModeMetadataRevision
+        val historyPosition = if (previous) frameModeHistory.peekPrevious() else frameModeHistory.peekNext()
+        mainScope.launch {
+            val choice =
+                try {
+                    withContext(Dispatchers.IO) {
+                        val session = runCatching { KrillSessionManager(context).cachedSession() }.getOrNull()
+                        val lease = session?.let { KrillFrameCache.fence.acquire(it.cacheNamespace) }
+                        if (session != null && lease == null) return@withContext FrameModeChoice(-1, null, stale = true)
+                        try {
+                            val job = currentCoroutineContext()[Job]!!
+                            lease?.onCancel { job.cancel() }
+                            val tried = mutableSetOf<Int>()
+                            var found: FrameModeChoice? = null
+                            while (tried.size < playlist.size) {
+                                job.ensureActive()
+                                val position =
+                                    historyPosition?.takeIf {
+                                        val category = index.categoryAt(it)
+                                        it !in tried && category != null && FrameModePolicy.accepts(mode, category)
+                                    }
+                                        ?: index.next(mode, originalPosition, previous, slide, percent) { it !in tried }
+                                        ?: break
+                                tried.add(position)
+                                val candidate = playlist.itemAt(position) ?: continue
+                                val category = FrameModePolicy.category(candidate.metadata.tags, candidate.metadata.tagsKnown)
+                                if (candidate.uri.toString() != uris.getOrNull(position) || category != index.categoryAt(position)) {
+                                    found = FrameModeChoice(position, null, stale = true)
+                                    break
+                                }
+                                if (!isExcludedFromRotation(candidate, session)) {
+                                    found = FrameModeChoice(position, candidate, fromHistory = position == historyPosition)
+                                    break
+                                }
+                            }
+                            job.ensureActive()
+                            found
+                        } finally {
+                            lease?.close()
+                        }
+                    }
+                } catch (_: MediaPlaylistContentionException) {
+                    retryPlaylistRead(previous, navigation)
+                    return@launch
+                } catch (_: MediaPlaylistFetchException) {
+                    retryPlaylistRead(previous, navigation)
+                    return@launch
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    Timber.w("Frame mode selection deferred")
+                    retryPlaylistRead(previous, navigation)
+                    return@launch
+                }
+            if (isStopped || navigation != navigationGeneration || screenCacheEpoch != KrillFrameCache.epoch) return@launch
+            if (choice?.stale == true || revision != playlist.metadataRevision) {
+                frameModeIndex = null
+                frameModeUris = emptyList()
+                buildFrameModeIndex()
+                delay(2_000)
+                if (!isStopped && navigation == navigationGeneration) loadNextItem(previous)
+                return@launch
+            }
+            val selected = choice?.media
+            if (selected == null || isExcludedFromRotation(selected)) {
+                frameModeActive = false
+                frameMode = FrameMode.PHOTOS
+                NotificationHelper.show(notificationContainer, resources.getString(R.string.frame_mode_empty))
+                playlist.restoreCursor(originalPosition)
+                loadNextItem(previous)
+                return@launch
+            }
+            val selectedChoice = choice ?: return@launch
+            playlist.restoreCursor(selectedChoice.position)
+            if (selectedChoice.fromHistory) {
+                if (previous) frameModeHistory.previous() else frameModeHistory.next()
+            } else if (previous) {
+                frameModeHistory.recordPrevious(selectedChoice.position)
+            } else {
+                frameModeHistory.record(selectedChoice.position)
+                if (mode == FrameMode.MIXED) mixedSlide++
+            }
+            presentSelectedMedia(selected, previous, navigation, restoreHistoryPair = selectedChoice.fromHistory)
+        }
+    }
+
+    private fun presentSelectedMedia(
+        selected: AerialMedia,
+        previous: Boolean,
+        navigation: Long,
+        restoreHistoryPair: Boolean = false,
+    ) {
+        playlistReadFailures = 0
+        var media = selected
+
+        if (frameModeActive && restoreHistoryPair) {
+            val restored =
+                portraitSlidesByEnd.entries.firstOrNull { (end, slide) ->
+                    slide.start == playlist.currentPosition && slide.first.uri == media.uri &&
+                        KrillPortraitHistory.adjacent(slide.start, end, playlist.size) &&
+                        frameModeUris.getOrNull(end) == slide.second.uri.toString() &&
+                        !isExcludedFromRotation(slide.first) && !isExcludedFromRotation(slide.second) &&
+                        !isPairRejected(slide.first, slide.second)
+                }
+            if (restored != null) {
+                playlist.restoreCursor(restored.key)
+                loadItem(restored.value.first, restored.value)
+                preloadNextFrameItem()
+                return
+            }
+        }
+
+        var pair: PortraitSlide? = null
+        if (previous && !frameModeActive) {
+            pair =
+                portraitSlidesByEnd[playlist.currentPosition]?.takeIf {
+                    KrillPortraitHistory.adjacent(it.start, playlist.currentPosition, playlist.size) &&
+                        it.second.uri == media.uri && !isExcludedFromRotation(it.first) && !isExcludedFromRotation(it.second) &&
+                        !isPairRejected(it.first, it.second)
+                }
+            if (pair == null) {
+                val namespace = runCatching { KrillSessionManager(context).cachedSession()?.cacheNamespace }.getOrNull()
+                val end = playlist.currentPosition
+                val start = namespace?.let { portraitHistory.findStart(it, end, media.uri.toString()) }
+                if (namespace != null && start != null && KrillPortraitHistory.adjacent(start, end, playlist.size)) {
+                    val second = media
+                    imagePlayer.stopTimerForTransition()
+                    mainScope.launch {
+                        val first = withContext(Dispatchers.IO) { runCatching { playlist.itemAt(start) }.getOrNull() }
+                        if (isStopped || navigation != navigationGeneration || playlist.currentPosition != end) return@launch
+                        val restored =
+                            if (first != null && portraitHistory.matchesFirst(namespace, end, first.uri.toString()) &&
+                                !isExcludedFromRotation(first) && !isExcludedFromRotation(second) && !isPairRejected(first, second)
+                            ) {
+                                PortraitSlide(start, first, second)
+                            } else {
+                                null
+                            }
+                        loadItem(restored?.first ?: second, restored)
+                        preloadNextFrameItem()
+                    }
+                    return
+                }
+            }
+            if (pair != null) media = pair.first
+        } else if (!previous) {
+            val start = playlist.currentPosition
+            val first = media
+            val next = playlist.peekNextItem { true }?.takeIf { !isExcludedFromRotation(it) }
+            val compatibleMode =
+                next != null && (
+                    !frameModeActive ||
+                        FrameModePolicy.category(first.metadata.tags, first.metadata.tagsKnown) ==
+                        FrameModePolicy.category(next.metadata.tags, next.metadata.tagsKnown)
+                )
+            if (first.metadata.pairedWithNext != false && next != null && compatibleMode &&
+                KrillPrivateFeed.isFrameImage(first.uri.toString()) && KrillPrivateFeed.isFrameImage(next.uri.toString())
+            ) {
+                imagePlayer.stopTimerForTransition()
+                mainScope.launch {
+                    val compatible = imagePlayer.probePortraitPair(first, next)
+                    if (isStopped || navigation != navigationGeneration || playlist.currentPosition != start) return@launch
+                    var chosen: PortraitSlide? = null
+                    if (compatible && !isExcludedFromRotation(first) && !isExcludedFromRotation(next) && !isPairRejected(first, next)) {
+                        val candidate =
+                            try {
+                                playlist.nextItem()
+                            } catch (_: MediaPlaylistContentionException) {
+                                null
+                            } catch (_: MediaPlaylistFetchException) {
+                                null
+                            }
+                        if (candidate?.uri == next.uri) {
+                            chosen = PortraitSlide(start, first, candidate)
+                            if (portraitSlidesByEnd.size >= 200) {
+                                portraitSlidesByEnd.keys.firstOrNull()?.let { portraitSlidesByEnd.remove(it) }
+                            }
+                            portraitSlidesByEnd[playlist.currentPosition] = chosen
+                            runCatching { KrillSessionManager(context).cachedSession()?.cacheNamespace }.getOrNull()?.let { namespace ->
+                                portraitHistory.save(
+                                    namespace,
+                                    playlist.currentPosition,
+                                    start,
+                                    first.uri.toString(),
+                                    candidate.uri.toString(),
+                                )
+                            }
+                        } else if (playlist.currentPosition != start) {
+                            playlist.restoreCursor(start)
+                        }
+                    }
+                    loadItem(first, chosen)
+                    preloadNextFrameItem()
+                }
+                return
+            }
+        }
+        loadItem(media, pair)
+        preloadNextFrameItem()
+    }
+
+    private fun preloadNextFrameItem() {
+        frameModePreload = null
+        if (!frameModeActive) {
+            imagePlayer.preloadNext(playlist.peekNextItem { !isExcludedFromRotation(it) })
+            return
+        }
+        val index = frameModeIndex ?: return
+        val source = playlist
+        val origin = source.currentPosition
+        val generation = navigationGeneration
+        val mode = frameMode
+        val slide = mixedSlide
+        val position =
+            frameModeHistory.peekNext()
+                ?: index.next(mode, origin, false, slide, GeneralPrefs.frameArtPercent.toIntOrNull() ?: 50)
+                ?: return
+        val expectedUri = frameModeUris.getOrNull(position) ?: return
+        mainScope.launch {
+            val next =
+                withContext(Dispatchers.IO) {
+                    val session = runCatching { KrillSessionManager(context).cachedSession() }.getOrNull()
+                    val lease = session?.let { KrillFrameCache.fence.acquire(it.cacheNamespace) }
+                    if (session != null && lease == null) return@withContext null
+                    try {
+                        val job = currentCoroutineContext()[Job]!!
+                        lease?.onCancel { job.cancel() }
+                        val media = runCatching { source.itemAt(position) }.getOrNull()
+                        job.ensureActive()
+                        media?.takeIf {
+                            it.uri.toString() == expectedUri &&
+                                FrameModePolicy.category(it.metadata.tags, it.metadata.tagsKnown) == index.categoryAt(position) &&
+                                !isExcludedFromRotation(it, session)
+                        }
+                    } finally {
+                        lease?.close()
+                    }
+                }
+            if (!isStopped && source === playlist && origin == source.currentPosition && generation == navigationGeneration &&
+                frameModeActive && mode == frameMode && slide == mixedSlide && screenCacheEpoch == KrillFrameCache.epoch
+            ) {
+                frameModePreload = next
+                imagePlayer.preloadNext(next)
             }
         }
     }
 
-    private fun saveMusicTrackPosition() {
-        if (GeneralPrefs.playlistCache) {
+    /** Build an index outside the player window, fenced to the active private library session. */
+    private fun buildFrameModeIndex() {
+        if (frameModeBuildJob?.isActive == true) return
+        val sourcePlaylist = playlist
+        frameModeBuildJob =
             mainScope.launch {
-                musicPlayer?.let {
-                    cacheRepository.saveMusicTrackIndex(it.getCurrentTrackIndex())
+                try {
+                    val result =
+                        withContext(Dispatchers.IO) {
+                            val namespace = KrillSessionManager(context).cachedSession()?.cacheNamespace
+                            val lease = namespace?.let { KrillFrameCache.fence.acquire(it) }
+                            if (namespace != null && lease == null) return@withContext null
+                            try {
+                                val job = currentCoroutineContext()[Job]!!
+                                lease?.onCancel { job.cancel() }
+                                val revision = sourcePlaylist.metadataRevision
+                                val projection =
+                                    playlistGate.load(playlistGateOwner) {
+                                        sourcePlaylist.snapshotProjection { media ->
+                                            val category = FrameModePolicy.category(media.metadata.tags, media.metadata.tagsKnown)
+                                            media.uri.toString() to category
+                                        }
+                                    }
+                                job.ensureActive()
+                                check(revision == sourcePlaylist.metadataRevision) { "Metadata changed while building frame modes" }
+                                if (screenCacheEpoch != KrillFrameCache.epoch || (lease != null && !lease.isValid())) {
+                                    return@withContext null
+                                }
+                                projection to revision
+                            } finally {
+                                lease?.close()
+                            }
+                        }
+                    if (!isStopped && sourcePlaylist === playlist && screenCacheEpoch == KrillFrameCache.epoch && result != null &&
+                        result.second == sourcePlaylist.metadataRevision
+                    ) {
+                        frameModeUris = result.first.map { it.first }
+                        frameModeIndex = FrameModeIndex(result.first.map { it.second })
+                        frameModeMetadataRevision = result.second
+                        frameModeBuildFailures = 0
+                        val artCount = result.first.count { it.second == FrameCategory.ART }
+                        Timber.i("Frame mode index ready: ${result.first.size} items, $artCount tagged as art")
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    frameModeBuildFailures++
+                    Timber.w("Frame mode index deferred")
+                }
+            }
+    }
+
+    private fun savePlaybackPosition() {
+        if (this::playlist.isInitialized && GeneralPrefs.playlistCache && playlistBackedByCache) {
+            mainScope.launch {
+                playlistGate.load(playlistGateOwner) {
+                    if (playlistGate.canRewrite(playlistGateOwner)) {
+                        Timber.d("PlaylistCache: Saving playback position: ${playlist.currentPosition}")
+                        val position = playlist.currentPosition
+                        saveSessionBound { cacheRepository.saveMediaPosition(position) }
+                    }
                 }
             }
         }
     }
 
+    private fun saveMusicTrackPosition() {
+        if (GeneralPrefs.playlistCache && playlistBackedByCache) {
+            mainScope.launch {
+                playlistGate.load(playlistGateOwner) {
+                    if (playlistGate.canRewrite(playlistGateOwner)) {
+                        val index = musicPlayer?.getCurrentTrackIndex()
+                        if (index != null) saveSessionBound { cacheRepository.saveMusicTrackIndex(index) }
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun saveSessionBound(block: suspend () -> Unit) =
+        withContext(Dispatchers.IO) {
+            try {
+                KrillFrameCache.withSessionGate(context) {
+                    if (screenCacheEpoch == KrillFrameCache.epoch) runBlocking(Dispatchers.IO) { block() }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                Timber.w("Playback position was not saved")
+            }
+        }
+
     fun stop() {
         if (isStopped) return
         isStopped = true
+        frameModeIndex = null
+        frameModeUris = emptyList()
+        frameModePreload = null
+        frameModeHistory.clear()
+        frameModeBuildJob?.cancel()
+        frameModeChangeJob?.cancel()
+        dashboardScheduleJob?.cancel()
+        closeDashboard()
+        navigationGeneration++
+        KrillFrameCache.removeInvalidationListener(cacheInvalidation)
 
-        if (GeneralPrefs.playlistCache) {
-            // ExoPlayer must be accessed on the main thread
-            val trackIndex = musicPlayer?.getCurrentTrackIndex() ?: 0
-            runBlocking(Dispatchers.IO) {
-                cacheRepository.saveMusicTrackIndex(trackIndex)
-            }
-        }
+        val saveFinalPosition = GeneralPrefs.playlistCache && playlistBackedByCache
+        val finalTrackIndex = if (saveFinalPosition) musicPlayer?.getCurrentTrackIndex() ?: 0 else 0
+        val finalPosition = if (saveFinalPosition && this::playlist.isInitialized) playlist.currentPosition else null
         RefreshRateHelper.restoreOriginalMode(context)
         overlayEventBridge.stop()
         // Release before detaching: View.removeCallbacks() does nothing once mAttachInfo is null,
@@ -918,12 +1558,362 @@ class ScreenController(
         metadataJobs.values.forEach { it.cancel() }
         metadataJobs.clear()
         mainScope.cancel()
+        if (saveFinalPosition) {
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    playlistGate.load(playlistGateOwner) {
+                        try {
+                            if (playlistGate.canRewrite(playlistGateOwner)) {
+                                saveSessionBound {
+                                    if (finalPosition != null) cacheRepository.saveMediaPosition(finalPosition)
+                                    cacheRepository.saveMusicTrackIndex(finalTrackIndex)
+                                }
+                            }
+                        } finally {
+                            playlistGateOwner.close()
+                        }
+                    }
+                } catch (_: Exception) {
+                    Timber.w("Final playback position was not saved")
+                } finally {
+                    playlistGateOwner.close()
+                }
+            }
+        } else {
+            playlistGateOwner.close()
+        }
     }
 
     fun skipItem(previous: Boolean = false) {
+        if (dashboardView != null) return
+        playlistReadFailures = 0
         explicitSkip = true
         previousItem = previous
         fadeOutCurrentItem()
+    }
+
+    private fun rotationKey(media: AerialMedia): String? {
+        if (media.source != AerialMediaSource.KRILL) return null
+        val segments = media.uri.pathSegments
+        if (segments.size == 5 && segments.take(3) == listOf("api", "frame", "media") && segments[4] == "image") {
+            val space = media.uri.getQueryParameter("space") ?: return null
+            return "${media.uri.scheme}://${media.uri.authority}/frame/$space/${segments[3]}"
+        }
+        if (segments.size < 3 || segments.last() != "public") return null
+        return "${media.uri.scheme}://${media.uri.authority}/${segments[segments.lastIndex - 1]}"
+    }
+
+    private fun isExcludedFromRotation(media: AerialMedia): Boolean {
+        val session = runCatching { KrillSessionManager(context).cachedSession() }.getOrNull()
+        return isExcludedFromRotation(media, session)
+    }
+
+    private fun isExcludedFromRotation(
+        media: AerialMedia,
+        session: KrillTokenStore.Session?,
+    ): Boolean {
+        if (rotationKey(media)?.let { excludedPhotos.getBoolean(it, false) } == true) return true
+        val url = media.uri.toString()
+        if ((KrillPrivateFeed.isFrameImage(url) || KrillPrivateFeed.isFrameVideo(url)) &&
+            !KrillPrivateFeed.isAuthorizedFrameMedia(url, session?.libraryOrigin, session?.spaceId)
+        ) {
+            return true
+        }
+        val pending = session?.pendingDeletion
+        return pending != null && KrillPrivateFeed.sameFramePhoto(pending.imageUrl, media.uri.toString())
+    }
+
+    private fun isPairRejected(
+        first: AerialMedia,
+        second: AerialMedia,
+    ): Boolean {
+        val namespace = runCatching { KrillSessionManager(context).cachedSession()?.cacheNamespace }.getOrNull() ?: return true
+        return portraitHistory.isPairRejected(namespace, first.uri.toString(), second.uri.toString())
+    }
+
+    private fun isPrivateMediaAuthorized(media: AerialMedia): Boolean {
+        val url = media.uri.toString()
+        if (!KrillPrivateFeed.isFrameImage(url) && !KrillPrivateFeed.isFrameVideo(url)) return true
+        return runCatching {
+            val session = KrillSessionManager(context).cachedSession()
+            KrillPrivateFeed.isAuthorizedFrameMedia(url, session?.libraryOrigin, session?.spaceId)
+        }.getOrDefault(false)
+    }
+
+    /** Opens a local rotation menu. Removing an item does not delete it from Krill. */
+    fun openPhotoOptions(): Boolean {
+        val media = currentMedia ?: return false
+        val video =
+            media.type == AerialMediaType.VIDEO && KrillPrivateFeed.isFrameVideo(media.uri.toString()) && isPrivateMediaAuthorized(media)
+        if (!canSkip || (!video && rotationKey(media) == null) || photoMenu != null) return false
+        val parent = view as? FrameLayout ?: return false
+        photoMenuWasPaused = isPaused
+        if (!isPaused) pauseMedia()
+        photoMenuHasPair = currentPortraitSlide != null
+        photoMenuIsVideo = video
+        photoMenuHasDelete = KrillPrivateFeed.isFrameImage(media.uri.toString()) && isPrivateMediaAuthorized(media)
+        deletionTarget = null
+        deletionNamespace = null
+        ignorePhotoMenuRelease = true
+        val density = resources.displayMetrics.density
+        val panel =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding((32 * density).toInt(), (24 * density).toInt(), (32 * density).toInt(), (24 * density).toInt())
+                setBackgroundColor(Color.argb(235, 20, 20, 20))
+            }
+
+        fun row(text: Int): TextView =
+            TextView(context).apply {
+                setText(text)
+                textSize = 22f
+                setPadding(24, 18, 24, 18)
+            }
+        if (video) {
+            panel.addView(row(R.string.frame_video_options))
+            panel.addView(
+                row(
+                    if (forcedMuteVideo) {
+                        R.string.frame_video_music_active
+                    } else if (videoPlayer.mutedState) {
+                        R.string.frame_video_unmute
+                    } else {
+                        R.string.frame_video_mute
+                    },
+                ),
+            )
+        } else {
+            panel.addView(row(R.string.frame_photo_options))
+            panel.addView(row(if (photoMenuHasPair) R.string.frame_remove_left_photo else R.string.frame_remove_from_rotation))
+            if (photoMenuHasPair) panel.addView(row(R.string.frame_remove_right_photo))
+            if (photoMenuHasPair) panel.addView(row(R.string.frame_split_pair))
+            panel.addView(row(R.string.frame_restore_rotation))
+            panel.addView(row(R.string.frame_reset_pairing_choices))
+            if (photoMenuHasDelete) panel.addView(row(if (photoMenuHasPair) R.string.frame_delete_left else R.string.frame_delete_photo))
+            if (photoMenuHasDelete && photoMenuHasPair) panel.addView(row(R.string.frame_delete_right))
+        }
+        panel.addView(row(R.string.frame_cancel))
+        photoMenuSelection = panel.childCount - 2 // Default to cancel.
+        parent.addView(
+            panel,
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER),
+        )
+        photoMenu = panel
+        updatePhotoMenuSelection()
+        return true
+    }
+
+    private fun updatePhotoMenuSelection() {
+        val panel = photoMenu as? LinearLayout ?: return
+        for (index in 0 until panel.childCount - 1) {
+            val row = panel.getChildAt(index + 1) as TextView
+            row.setTextColor(if (index == photoMenuSelection) Color.BLACK else Color.WHITE)
+            row.setBackgroundColor(if (index == photoMenuSelection) Color.WHITE else Color.TRANSPARENT)
+        }
+        (panel.getChildAt(0) as TextView).setTextColor(Color.WHITE)
+    }
+
+    /** Returns true when the photo menu owns the event. */
+    fun handlePhotoOptionsKey(event: KeyEvent): Boolean {
+        if (photoMenu == null) return false
+        if (event.action != KeyEvent.ACTION_UP) return true
+        if (event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER && ignorePhotoMenuRelease) {
+            ignorePhotoMenuRelease = false
+            return true
+        }
+        when (event.keyCode) {
+            KeyEvent.KEYCODE_DPAD_UP -> {
+                photoMenuSelection = (photoMenuSelection - 1).coerceAtLeast(0)
+                updatePhotoMenuSelection()
+            }
+
+            KeyEvent.KEYCODE_DPAD_DOWN -> {
+                photoMenuSelection = (photoMenuSelection + 1).coerceAtMost((photoMenu as LinearLayout).childCount - 2)
+                updatePhotoMenuSelection()
+            }
+
+            KeyEvent.KEYCODE_BACK -> {
+                closePhotoOptions(false)
+            }
+
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                if (photoMenuIsVideo) {
+                    val toggle = photoMenuSelection == 0 && !forcedMuteVideo
+                    closePhotoOptions(false)
+                    if (toggle) toggleMute()
+                    return true
+                }
+                if (deletionTarget != null) {
+                    val target = deletionTarget
+                    val namespace = deletionNamespace
+                    val confirmed = photoMenuSelection == 1
+                    closePhotoOptions(false)
+                    if (confirmed && target != null && namespace != null) requestPermanentDeletion(namespace, target)
+                    return true
+                }
+                val deleteIndex = if (photoMenuHasPair) 5 else 3
+                if (photoMenuHasDelete &&
+                    (photoMenuSelection == deleteIndex || (photoMenuHasPair && photoMenuSelection == deleteIndex + 1))
+                ) {
+                    val target =
+                        if (photoMenuHasPair &&
+                            photoMenuSelection == deleteIndex + 1
+                        ) {
+                            currentPortraitSlide?.second
+                        } else {
+                            currentMedia
+                        }
+                    val namespace = runCatching { KrillSessionManager(context).cachedSession()?.cacheNamespace }.getOrNull()
+                    if (target != null && namespace != null) showDeleteConfirmation(target, namespace)
+                    return true
+                }
+                val restoreIndex = if (photoMenuHasPair) 3 else 1
+                if (photoMenuSelection == restoreIndex) excludedPhotos.edit().clear().apply()
+                val resetIndex = if (photoMenuHasPair) 4 else 2
+                if (photoMenuSelection == resetIndex) {
+                    runCatching { KrillSessionManager(context).cachedSession()?.cacheNamespace }.getOrNull()?.let {
+                        portraitHistory.resetRejections(it)
+                    }
+                }
+                val separate = photoMenuHasPair && photoMenuSelection == 2
+                val removed =
+                    when {
+                        photoMenuSelection == 0 -> currentMedia
+                        photoMenuHasPair && photoMenuSelection == 1 -> currentPortraitSlide?.second
+                        else -> null
+                    }
+                closePhotoOptions(false)
+                if (separate) showCurrentPairSeparately()
+                if (removed != null) {
+                    rotationKey(removed)?.let { excludedPhotos.edit().putBoolean(it, true).apply() }
+                    skipItem()
+                }
+            }
+        }
+        return true
+    }
+
+    private fun showDeleteConfirmation(
+        media: AerialMedia,
+        namespace: String,
+    ) {
+        deletionTarget = media
+        deletionNamespace = namespace
+        val panel = photoMenu as? LinearLayout ?: return
+        panel.removeAllViews()
+        for (text in listOf(R.string.frame_delete_confirm, R.string.frame_cancel, R.string.frame_delete_yes)) {
+            panel.addView(
+                TextView(context).apply {
+                    setText(text)
+                    textSize = 22f
+                    setPadding(24, 18, 24, 18)
+                },
+            )
+        }
+        photoMenuSelection = 0
+        updatePhotoMenuSelection()
+    }
+
+    private fun requestPermanentDeletion(
+        namespace: String,
+        media: AerialMedia,
+    ) {
+        mainScope.launch {
+            try {
+                val result =
+                    withContext(Dispatchers.IO) {
+                        val job = currentCoroutineContext()[Job]
+                        val client = deletionKrillClient(job)
+                        KrillDeletionRequest(
+                            context.applicationContext,
+                            client,
+                        ) { job?.ensureActive() }.submit(namespace, media.uri.toString())
+                    }
+                Toast.makeText(context, R.string.frame_delete_pending, Toast.LENGTH_LONG).show()
+                if ((result == "pending" || result == "completed") && isCurrentPhoto(media) && canSkip) skipItem()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                val pending = runCatching { KrillSessionManager(context).cachedSession()?.pendingDeletion }.getOrNull()
+                val saved = pending != null && KrillPrivateFeed.sameFramePhoto(pending.imageUrl, media.uri.toString())
+                Toast.makeText(context, if (saved) R.string.frame_delete_retry else R.string.frame_delete_error, Toast.LENGTH_LONG).show()
+                if (saved && isCurrentPhoto(media) && canSkip) skipItem()
+            }
+        }
+    }
+
+    private fun isCurrentPhoto(media: AerialMedia): Boolean =
+        listOfNotNull(currentMedia, currentPortraitSlide?.second).any {
+            KrillPrivateFeed.sameFramePhoto(it.uri.toString(), media.uri.toString())
+        }
+
+    /** Check for caption updates while this screen remains active. */
+    private suspend fun refreshCaptionsWhileActive() {
+        runKrillCaptionSchedule {
+            if (GeneralPrefs.wifiOnly && !NetworkHelper.isOnWifiOrEthernet(context)) return@runKrillCaptionSchedule
+            val session = withContext(Dispatchers.IO) { runCatching { KrillSessionManager(context).cachedSession() }.getOrNull() }
+            if (session?.spaceId == null) return@runKrillCaptionSchedule
+            val refresh = KrillCachedMetadataRefresh.refreshCaptions(context.applicationContext, session, playlist)
+            try {
+                refresh.join()
+            } finally {
+                refresh.cancel()
+            }
+        }
+    }
+
+    /** Retry a saved operation when a screen starts and until the server confirms it. */
+    private suspend fun recoverPendingDeletion() {
+        while (true) {
+            try {
+                withContext(Dispatchers.IO) {
+                    val job = currentCoroutineContext()[Job]
+                    val client = deletionKrillClient(job)
+                    KrillFrameCache.retryDeletionCleanup(context.applicationContext)
+                    val session = KrillSessionManager(context).cachedSession()
+                    val pending = session?.pendingDeletion
+                    if (session != null && pending != null) {
+                        val request = KrillDeletionRequest(context.applicationContext, client) { job?.ensureActive() }
+                        if (request.reconcile(session.cacheNamespace) == "unknown") {
+                            request.submit(session.cacheNamespace, pending.imageUrl)
+                        }
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Keep the operation for the next attempt, including after restart.
+            }
+            delay(30_000)
+        }
+    }
+
+    private fun showCurrentPairSeparately() {
+        val slide = currentPortraitSlide ?: return
+        val namespace = runCatching { KrillSessionManager(context).cachedSession()?.cacheNamespace }.getOrNull() ?: return
+        portraitHistory.rejectPair(namespace, slide.first.uri.toString(), slide.second.uri.toString())
+        pauseAfterNextImage = photoMenuWasPaused
+        canSkip = false
+        photoTransition = imagePlayer.beginPhotoTransition()
+        onPortraitPairFailed()
+        currentLoadIsPrevious = false
+        loadItem(slide.first)
+        preloadNextFrameItem()
+    }
+
+    private fun closePhotoOptions(remove: Boolean) {
+        (photoMenu?.parent as? ViewGroup)?.removeView(photoMenu)
+        photoMenu = null
+        deletionTarget = null
+        deletionNamespace = null
+        if (remove) {
+            currentMedia?.let { media -> rotationKey(media)?.let { excludedPhotos.edit().putBoolean(it, true).apply() } }
+            if (!photoMenuWasPaused) resumeMedia()
+            skipItem()
+        } else if (!photoMenuWasPaused) {
+            resumeMedia()
+        }
     }
 
     fun toggleBlackOutMode(source: BlackOutSource = BlackOutSource.USER) {
@@ -947,6 +1937,12 @@ class ScreenController(
      */
     private fun enterBlackOutMode(source: BlackOutSource) {
         blackOutMode = true
+        dashboardDeferredItem = null
+        dashboardDeferredPrevious = null
+        dashboardSchedulePending = lastDashboardScheduleState == true && !dashboardManuallyClosed
+        dashboardRetryAt = 0L
+        closeDashboard()
+        photoTransition = false
         blackOutSource = source
         sleepTimerJob?.cancel()
         canSkip = false
@@ -1034,11 +2030,202 @@ class ScreenController(
     }
 
     fun togglePause() {
+        if (dashboardView != null) return
         if (isPaused) {
             resumeMedia()
         } else {
             pauseMedia()
         }
+    }
+
+    /** Respect configured directional actions, otherwise use up/down to cycle frame modes. */
+    fun handleDashboardKey(event: KeyEvent): Boolean {
+        if (blackOutMode) return false
+        if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP || event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+            if (dashboardView == null) {
+                val press = if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP) GeneralPrefs.buttonUpPress else GeneralPrefs.buttonDownPress
+                val hold = if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP) GeneralPrefs.buttonUpHold else GeneralPrefs.buttonDownHold
+                if (press != ButtonType.IGNORE || hold != ButtonType.IGNORE) return false
+            }
+            if (event.action == KeyEvent.ACTION_UP && event.repeatCount == 0) {
+                changeFrameMode(event.keyCode == KeyEvent.KEYCODE_DPAD_UP)
+            }
+            return true
+        }
+        if (dashboardView == null) return false
+        if (event.keyCode == KeyEvent.KEYCODE_BACK) {
+            if (event.action == KeyEvent.ACTION_UP) {
+                dashboardRetryAt = 0L
+                dashboardManuallyClosed = true
+                closeDashboard()
+            }
+            return true
+        }
+        return event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT || event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT ||
+            event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER
+    }
+
+    private fun changeFrameMode(forward: Boolean) {
+        val index = frameModeIndex
+        if (index == null || frameModeMetadataRevision != playlist.metadataRevision) {
+            if (this::playlist.isInitialized) buildFrameModeIndex()
+            val message = if (frameModeBuildFailures >= 3) R.string.frame_mode_unavailable else R.string.frame_mode_loading
+            NotificationHelper.show(notificationContainer, resources.getString(message))
+            return
+        }
+        val modes = mutableListOf(FrameMode.PHOTOS)
+        if (index.has(FrameCategory.ART)) modes.add(FrameMode.ART)
+        modes.add(FrameMode.MIXED)
+        if (DashboardConfig.validUrl(GeneralPrefs.dashboardUrl.trim())) modes.add(FrameMode.DASHBOARD)
+        val current = if (dashboardView != null) FrameMode.DASHBOARD else frameMode
+        val currentIndex = modes.indexOf(current).coerceAtLeast(0)
+        val next =
+            if (!frameModeActive && dashboardView == null) {
+                if (forward) modes.first() else modes.last()
+            } else {
+                modes[Math.floorMod(currentIndex + if (forward) 1 else -1, modes.size)]
+            }
+        if (next == FrameMode.DASHBOARD) {
+            dashboardManuallyClosed = false
+            showDashboard()
+            if (dashboardView != null) {
+                Timber.i("Frame mode selected: DASHBOARD")
+            } else {
+                NotificationHelper.show(notificationContainer, resources.getString(R.string.frame_mode_loading))
+            }
+            return
+        }
+        dashboardManuallyClosed = dashboardView != null
+        dashboardRetryAt = 0L
+        closeDashboard()
+        frameModeChangeJob?.cancel()
+        frameModeChangeJob =
+            mainScope.launch {
+                while (!canSkip && !isStopped && !blackOutMode) delay(100)
+                if (isStopped || blackOutMode || dashboardView != null) return@launch
+                frameMode = next
+                frameModeActive = true
+                mixedSlide = 0
+                frameModePreload = null
+                Timber.i("Frame mode selected: $next")
+                frameModeHistory.clear()
+                val currentPosition = currentPortraitSlide?.start ?: playlist.currentPosition
+                val currentCategory = index.categoryAt(currentPosition)
+                if (currentCategory != null && FrameModePolicy.accepts(next, currentCategory)) {
+                    frameModeHistory.record(currentPosition)
+                }
+                val label =
+                    when (next) {
+                        FrameMode.PHOTOS -> R.string.frame_mode_photos
+                        FrameMode.ART -> R.string.frame_mode_art
+                        FrameMode.MIXED -> R.string.frame_mode_mixed
+                        FrameMode.DASHBOARD -> R.string.frame_mode_dashboard
+                    }
+                NotificationHelper.show(notificationContainer, resources.getString(label))
+                skipItem()
+            }
+    }
+
+    @Suppress("SetJavaScriptEnabled")
+    private fun showDashboard() {
+        val url = GeneralPrefs.dashboardUrl.trim()
+        if (dashboardView != null || !DashboardConfig.validUrl(url) || isStopped || blackOutMode || !canSkip) return
+        dashboardRetryAt = 0L
+        dashboardWasPaused = isPaused
+        if (!isPaused) pauseMedia()
+        dashboardMusicPaused = musicPlayer?.isPlaybackRequested == true
+        if (dashboardMusicPaused) musicPlayer?.pause()
+        val webView = android.webkit.WebView(context)
+        dashboardView = webView
+        webView.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            allowFileAccess = false
+            allowContentAccess = false
+            mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
+        }
+        android.webkit.CookieManager
+            .getInstance()
+            .setAcceptThirdPartyCookies(webView, false)
+        webView.webViewClient =
+            object : android.webkit.WebViewClient() {
+                override fun shouldInterceptRequest(
+                    view: android.webkit.WebView,
+                    request: android.webkit.WebResourceRequest,
+                ): android.webkit.WebResourceResponse? {
+                    if (request.isForMainFrame && !DashboardConfig.sameOrigin(url, request.url.toString())) {
+                        view.post { dashboardLoadFailed(view, retry = false) }
+                        return android.webkit.WebResourceResponse("text/plain", "UTF-8", java.io.ByteArrayInputStream(ByteArray(0)))
+                    }
+                    return null
+                }
+
+                override fun shouldOverrideUrlLoading(
+                    view: android.webkit.WebView,
+                    request: android.webkit.WebResourceRequest,
+                ): Boolean {
+                    val blocked = request.isForMainFrame && !DashboardConfig.sameOrigin(url, request.url.toString())
+                    if (blocked) view.post { dashboardLoadFailed(view, retry = false) }
+                    return blocked
+                }
+
+                override fun onReceivedSslError(
+                    view: android.webkit.WebView,
+                    handler: android.webkit.SslErrorHandler,
+                    error: android.net.http.SslError,
+                ) {
+                    handler.cancel()
+                    view.post { dashboardLoadFailed(view, retry = false) }
+                }
+
+                override fun onReceivedError(
+                    view: android.webkit.WebView,
+                    request: android.webkit.WebResourceRequest,
+                    error: android.webkit.WebResourceError,
+                ) {
+                    if (request.isForMainFrame) view.post { dashboardLoadFailed(view) }
+                }
+
+                override fun onReceivedHttpError(
+                    view: android.webkit.WebView,
+                    request: android.webkit.WebResourceRequest,
+                    errorResponse: android.webkit.WebResourceResponse,
+                ) {
+                    if (request.isForMainFrame) view.post { dashboardLoadFailed(view, retry = errorResponse.statusCode >= 500) }
+                }
+            }
+        (view as FrameLayout).addView(webView, FrameLayout.LayoutParams(-1, -1))
+        webView.loadUrl(url)
+    }
+
+    private fun closeDashboard() {
+        val webView = dashboardView ?: return
+        dashboardView = null
+        (webView.parent as? ViewGroup)?.removeView(webView)
+        webView.stopLoading()
+        webView.destroy()
+        if (!isStopped && !blackOutMode) {
+            if (dashboardMusicPaused) musicPlayer?.resume()
+            dashboardMusicPaused = false
+            val deferredItem = dashboardDeferredItem
+            val deferredPrevious = dashboardDeferredPrevious
+            dashboardDeferredItem = null
+            dashboardDeferredPrevious = null
+            when {
+                deferredItem != null -> loadItem(deferredItem.first, deferredItem.second)
+                deferredPrevious != null -> loadNextItem(deferredPrevious)
+                !dashboardWasPaused -> resumeMedia()
+            }
+        }
+    }
+
+    private fun dashboardLoadFailed(
+        failed: android.webkit.WebView,
+        retry: Boolean = true,
+    ) {
+        if (dashboardView !== failed) return
+        dashboardRetryAt = if (retry) android.os.SystemClock.elapsedRealtime() + 60_000 else 0L
+        closeDashboard()
     }
 
     fun toggleLooping() {
@@ -1055,7 +2242,7 @@ class ScreenController(
     }
 
     fun restartVideo() {
-        if (blackOutMode) return
+        if (blackOutMode || dashboardView != null) return
         if (currentMedia?.type != AerialMediaType.VIDEO) return
         // Restart resumes playback, so clear any paused state
         if (isPaused) resumeMedia()
@@ -1106,7 +2293,6 @@ class ScreenController(
         if (isPaused) return
 
         isPaused = true
-        pauseStartTime = System.currentTimeMillis()
 
         // Pause video if currently showing
         if (videoViewBinding.root.isVisible) {
@@ -1125,10 +2311,10 @@ class ScreenController(
     }
 
     private fun resumeMedia() {
+        if (dashboardView != null) return
         if (!isPaused) return
 
         isPaused = false
-        val pauseDuration = System.currentTimeMillis() - pauseStartTime
 
         // Resume video if currently showing
         if (videoViewBinding.root.isVisible) {
@@ -1137,7 +2323,7 @@ class ScreenController(
 
         // Resume image timer if currently showing
         if (imageViewBinding.root.isVisible) {
-            imagePlayer.resumeTimer(pauseDuration)
+            imagePlayer.resumeTimer()
         }
 
         // Resume progress bar
@@ -1149,14 +2335,36 @@ class ScreenController(
     private fun handleError() {
         if (blackOutMode) return
 
+        if (dashboardView != null) {
+            dashboardDeferredPrevious = currentLoadIsPrevious
+            return
+        }
+
+        val failedNavigation = navigationGeneration
+        val previous = currentLoadIsPrevious
+
+        if (photoTransition) {
+            mainScope.launch {
+                delay(ERROR_DELAY.milliseconds)
+                if (!isStopped && failedNavigation == navigationGeneration) loadNextItem(previous)
+            }
+            return
+        }
+
         recreateVideoPlayer()
 
         mainScope.launch {
             delay(ERROR_DELAY.milliseconds)
+            if (isStopped || failedNavigation != navigationGeneration) return@launch
+            if (dashboardView != null) {
+                dashboardDeferredPrevious = previous
+                return@launch
+            }
             if (loadingView.isVisible) {
-                loadNextItem()
+                loadNextItem(previous)
             } else {
                 explicitSkip = true
+                previousItem = previous
                 fadeOutCurrentItem()
             }
         }
@@ -1207,7 +2415,6 @@ class ScreenController(
 
     override fun onVideoMetadataExtracted(metadata: ExtractedVideoMetadata) {
         val media = currentMedia ?: return
-        Timber.i("Video metadata: %s", formatVideoMetadataForLog(metadata))
         val changed = applyVideoMetadataToMedia(media, metadata)
 
         if (changed) {
@@ -1218,6 +2425,16 @@ class ScreenController(
     override fun onImageFinished() = fadeOutCurrentItem()
 
     override fun onImageError() = handleError()
+
+    override fun onPortraitPairFailed() {
+        val slide = currentPortraitSlide ?: return
+        portraitSlidesByEnd.remove(playlist.currentPosition)
+        runCatching { KrillSessionManager(context).cachedSession()?.cacheNamespace }.getOrNull()?.let {
+            portraitHistory.remove(it, playlist.currentPosition)
+        }
+        playlist.restoreCursor(slide.start)
+        currentPortraitSlide = null
+    }
 
     private fun updateMetadataOverlayData(media: AerialMedia) {
         val metadataSlots =
@@ -1323,10 +2540,21 @@ class ScreenController(
     override fun onImagePrepared() {
         Timber.d("onImagePrepared")
         if (blackOutMode) return
+        if (photoTransition) {
+            photoTransition = false
+            imagePlayer.finishPhotoTransition(mediaFadeIn)
+        }
         currentMedia
             ?.takeIf { it.type == AerialMediaType.IMAGE }
             ?.let { updateMetadataOverlayData(it) }
         fadeInNextItem()
+        if (pauseAfterNextImage) {
+            pauseAfterNextImage = false
+            val media = currentMedia
+            imagePlayer.post {
+                if (!isStopped && currentMedia === media) pauseMedia()
+            }
+        }
     }
 
     private fun bindOverlayState() {

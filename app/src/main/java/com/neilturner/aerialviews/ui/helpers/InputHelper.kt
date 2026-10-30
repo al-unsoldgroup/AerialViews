@@ -35,6 +35,12 @@ object InputHelper {
     ): Boolean {
         var result = false
 
+        if (controller?.handlePhotoOptionsKey(event) == true) return true
+        if (controller?.handleDashboardKey(event) == true) return true
+        if (event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER && event.action == KeyEvent.ACTION_DOWN && event.isLongPress) {
+            if (controller?.openPhotoOptions() == true) return true
+        }
+
         if (event.repeatCount == 0) {
             longPressEvent = false
         }
