@@ -2061,8 +2061,11 @@ class ScreenController(
             }
             return true
         }
-        return event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT || event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT ||
-            event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER
+        val direction = DashboardConfig.navDirection(event.keyCode) ?: return false
+        if (event.action == KeyEvent.ACTION_UP && event.repeatCount == 0) {
+            dashboardView?.evaluateJavascript(DashboardConfig.navScript(direction), null)
+        }
+        return true
     }
 
     private fun changeFrameMode(forward: Boolean) {

@@ -1,5 +1,6 @@
 package com.neilturner.aerialviews.ui.core
 
+import android.view.KeyEvent
 import java.net.URI
 import java.time.LocalTime
 
@@ -17,6 +18,18 @@ internal data class DashboardSchedule(
 }
 
 internal object DashboardConfig {
+    /** Remote key to the dashboard page's window.frameNav direction: -1 previous, 1 next, 0 pause toggle. */
+    fun navDirection(keyCode: Int): Int? =
+        when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_LEFT -> -1
+            KeyEvent.KEYCODE_DPAD_RIGHT -> 1
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> 0
+            else -> null
+        }
+
+    /** Calls the page's navigation hook only when the page defines it. */
+    fun navScript(direction: Int): String = "window.frameNav&&window.frameNav($direction)"
+
     fun validUrl(value: String): Boolean =
         runCatching {
             val uri = URI(value)
