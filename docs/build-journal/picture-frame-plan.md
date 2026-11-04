@@ -6,17 +6,17 @@ Turn a Google TV 4K dongle connected to The Frame into a personal picture frame.
 
 ## Agreed experience
 
-- **Sources:** Select Google Photos with Google's Photos Picker. Selected items join the rotation until removed. Include personally selected art and curated art from public collections with suitable reuse rights. Support photos and video.
+- **Sources:** Select Google Photos with Google's Photos Picker. Selected items join the rotation until removed. The first art milestone uses art Al personally selects and uploads; curated public collections with suitable reuse rights are a later milestone. Support photos and video.
 - **Composition:** Use Cloudflare Images for appropriately sized images and automatic focus. Test automatic and face-aware cropping. Supply manual focus and crop overrides. Art fills the screen by default, with an adjustable crop.
 - **Collages:** Automatically combine compatible photos when useful, favoring the same trip or occasion while allowing visually compatible alternatives. Allow users to create and adjust groupings. Show a photo alone with a tasteful border when a good composition is unavailable.
 - **Context:** Extract available EXIF, capture date and GPS; show a readable location. Suggest trip matches from location and date, with correction. Suggest artwork identification and catalogue details, with correction or rejection. Omit missing or uncertain information. Show captions briefly and subtly.
 - **Modes:** Photos, Art, Mixed and Dashboard. Mixed has an adjustable photo/art balance. Dashboard displays a selected hosted URL, started manually or on a schedule.
 - **Video:** Start muted with an unmute control. Loop shorter videos until the slide duration expires; stop longer videos at that duration.
-- **Control:** Provide full management on a phone-friendly web app and TV, including sources, rotation, modes, crop and collage overrides, playback and settings.
+- **Control:** The TV handles everyday playback and current-item actions, including removal from rotation. The phone-friendly web app handles detailed library, crop, grouping, schedule and settings management, and is the only place for permanent deletion.
 - **Remote:** Left and right move to the previous or next image or video. Up and down change between Photos, Art, Mixed and Dashboard modes. A long press of the centre button opens options for the current photo, including removal from the rotation. Resolve dashboard navigation and collage-editing conflicts during implementation.
 - **Startup:** Make the frame the default screensaver and open it when the TV boots, while retaining a way to return to the normal TV interface. Grant only permissions needed for these functions.
 - **Delivery:** Log in to Krill for the user's permitted library and higher-resolution images. Preload upcoming media and transition without loading screens. Pair portrait photos in a landscape collage where suitable.
-- **Offline:** Continue displaying locally cached photos, art and videos. For a dashboard, retain its last view if technically possible. Test and decide a fallback if it cannot be retained.
+- **Offline:** Continue displaying locally cached photos, art and videos. For a dashboard, retain its last view when that is reliable; otherwise return to cached media and indicate that the dashboard is offline.
 - **Deletion:** Deleting an item in the frame app removes it from rotation, Cloudflare storage and TV caches. Try to detect Google Photos deletions; if unavailable, remove the frame copy manually. Never delete the original Google Photos item as a consequence of frame deletion.
 
 ## Proposed architecture
@@ -53,13 +53,24 @@ Do not assume a Google Photos album stays synchronized: the Picker is a user-ini
 - Both TV and web controls cover the agreed management tasks. Cached media continues offline and reconciles on reconnect.
 - Test the Google TV connection, screensaver start, screen fit and remote controls on the actual device; verify privacy, access and removal end to end.
 
-## Open decisions
+## Scoping decisions (2026-11-03)
 
-- Actual TV client and whether Aerial Views needs a fork or companion app.
-- Trip data source, public art catalogues, initial slide duration and default mixed-mode balance.
-- Cache capacity, offline dashboard fallback, authorization method and hosting budget.
-- Whether Google's Picker supplies adequate GPS and whether automatic source deletion detection is possible.
-- Tracker and implementation tickets after feasibility results; do not assume a Linear project.
+- **Portrait pairs:** Pair automatically only on reliable same-trip or same-occasion evidence. Missing or uncertain grouping evidence shows the photo alone.
+- **Dashboard offline:** Keep the last view when reliable; otherwise fall back to cached media with an offline indicator.
+- **Art source:** Personal uploads first. Curated public collections later.
+- **Captions:** Brief and subtle, verified information only; omit missing or uncertain details.
+- **TV versus phone:** TV for playback and current-item actions; phone for library, crop, grouping and schedules.
+- **Permanent deletion:** Phone only. The TV can remove an item from rotation.
+- **Defaults (engineering, adjustable in settings):** 30-second slides, Mixed mode 70% photos / 30% art, offline cache bounded and sized after measuring free storage on the dongle.
+
+## Next steps
+
+1. **Evidence on the TV.** Install the current branch APK and record the version. Verify against representative media: smart crop, display-size delivery, portrait pairs, focus overrides, D-pad and modes, long-press options, video loop and mute, dashboard schedule, captions, deletion, offline and reconnect, and new media appearing without a restart. Reconcile the Linear checklist against this evidence.
+2. **Close the gaps.** Fix what step 1 fails, and bring behavior in line with the decisions above: TV remove-from-rotation, phone-only permanent deletion, evidence-only pairs, verified-only captions, dashboard offline fallback.
+3. **Personal art.** Upload art from the phone, Art and Mixed modes, fill by default with an adjustable crop.
+4. **Release.** Review the Android branch, publish an APK through the authorized workflow, and finish the community guide.
+
+**Later:** curated public art, iCloud sources, trip enrichment from an authorized trip-record source, dashboard and artwork enhancements, 4K and 1 GiB video proof once a 4K display is available.
 
 ## References
 
