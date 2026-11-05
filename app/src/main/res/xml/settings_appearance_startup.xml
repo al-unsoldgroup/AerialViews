@@ -32,14 +32,27 @@
 
         <PreferenceCategory app:title="@string/frame_dashboard_title">
                 <EditTextPreference app:key="frame_dashboard_url" app:title="@string/frame_dashboard_url" app:summary="@string/frame_dashboard_url_summary" />
-                <EditTextPreference app:defaultValue="00:00" app:key="frame_dashboard_start" app:title="@string/frame_dashboard_start" app:summary="@string/frame_dashboard_time_summary" />
-                <EditTextPreference app:defaultValue="00:00" app:key="frame_dashboard_end" app:title="@string/frame_dashboard_end" app:summary="@string/frame_dashboard_time_summary" />
+        </PreferenceCategory>
+
+        <PreferenceCategory app:title="@string/frame_schedule_title" app:summary="@string/frame_schedule_summary">
+                <MultiSelectListPreference app:key="frame_schedule_days" app:title="@string/frame_schedule_days"
+                    app:defaultValue="@array/frame_schedule_days_default" app:entries="@array/frame_schedule_days_entries"
+                    app:entryValues="@array/frame_schedule_days_values" app:summary="@string/frame_schedule_days_summary" />
+                <EditTextPreference app:defaultValue="07:00" app:key="frame_schedule_start" app:title="@string/frame_schedule_start" app:useSimpleSummaryProvider="true" />
+                <EditTextPreference app:defaultValue="18:00" app:key="frame_schedule_end" app:title="@string/frame_schedule_end" app:useSimpleSummaryProvider="true" />
+                <ListPreference app:key="frame_schedule_interval" app:title="@string/frame_schedule_interval"
+                    app:defaultValue="5" app:entries="@array/frame_schedule_interval_entries"
+                    app:entryValues="@array/frame_schedule_interval_values" app:useSimpleSummaryProvider="true" />
+                <ListPreference app:key="frame_schedule_duration" app:title="@string/frame_schedule_duration"
+                    app:defaultValue="1" app:entries="@array/frame_schedule_duration_entries"
+                    app:entryValues="@array/frame_schedule_duration_values" app:useSimpleSummaryProvider="true" />
         </PreferenceCategory>
 
         <PreferenceCategory app:title="@string/frame_modes_title">
-                <ListPreference app:key="frame_art_percent" app:title="@string/frame_art_percent"
-                    app:defaultValue="50" app:entries="@array/frame_art_percent_entries"
-                    app:entryValues="@array/frame_art_percent_values" app:useSimpleSummaryProvider="true" />
+                <ListPreference app:key="frame_art_cadence" app:title="@string/frame_art_cadence"
+                    app:defaultValue="PERCENT" app:entries="@array/frame_art_cadence_entries"
+                    app:entryValues="@array/frame_art_cadence_values" app:useSimpleSummaryProvider="true" />
+                <EditTextPreference app:defaultValue="30" app:key="frame_art_amount" app:title="@string/frame_art_amount" app:useSimpleSummaryProvider="true" />
         </PreferenceCategory>
 
         <PreferenceCategory app:title="@string/category_typography">

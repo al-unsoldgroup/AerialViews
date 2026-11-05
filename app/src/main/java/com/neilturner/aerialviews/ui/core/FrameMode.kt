@@ -6,6 +6,9 @@ internal enum class FrameMode { PHOTOS, ART, MIXED, DASHBOARD }
 
 internal enum class FrameCategory { PHOTO, ART, UNKNOWN }
 
+/** How Mixed mode spaces art: X percent of slides, one in every X slides, or once every X minutes. */
+internal enum class ArtCadence { PERCENT, SLIDES, MINUTES }
+
 internal object FrameModePolicy {
     fun accepts(
         mode: FrameMode,
@@ -30,6 +33,26 @@ internal object FrameModePolicy {
             FrameCategory.PHOTO
         }
     }
+
+    fun mixedTarget(
+        cadence: ArtCadence,
+        amount: Int,
+        slide: Long,
+        millisSinceArt: Long,
+    ): FrameCategory =
+        when (cadence) {
+            ArtCadence.PERCENT -> {
+                mixedTarget(slide, amount)
+            }
+
+            ArtCadence.SLIDES -> {
+                if (amount > 0 && Math.floorMod(slide + 1, amount.toLong()) == 0L) FrameCategory.ART else FrameCategory.PHOTO
+            }
+
+            ArtCadence.MINUTES -> {
+                if (amount > 0 && millisSinceArt >= amount * 60_000L) FrameCategory.ART else FrameCategory.PHOTO
+            }
+        }
 
     /** Selects an even distribution across a hundred slides without randomness. */
     fun mixedTarget(
@@ -58,15 +81,14 @@ internal class FrameModeIndex(
         mode: FrameMode,
         current: Int,
         previous: Boolean,
-        mixedSlide: Long,
-        artPercent: Int,
+        mixedTarget: FrameCategory = FrameCategory.PHOTO,
         eligible: (Int) -> Boolean = { true },
     ): Int? {
         val target =
             when (mode) {
                 FrameMode.PHOTOS -> FrameCategory.PHOTO
                 FrameMode.ART -> FrameCategory.ART
-                FrameMode.MIXED -> FrameModePolicy.mixedTarget(mixedSlide, artPercent)
+                FrameMode.MIXED -> mixedTarget
                 FrameMode.DASHBOARD -> return null
             }
 

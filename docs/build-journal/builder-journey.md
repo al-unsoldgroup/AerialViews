@@ -431,6 +431,16 @@ On 30 October, the background flow was deployed to Footage Rodeo from [Krill com
 
 The real MOV test exposed two provider differences: Google redirected video delivery and omitted the strong validator expected by the first uploader. The importer now follows Google-hosted redirects without forwarding the bearer token to a different origin, and verifies chunk digests when a stable validator is unavailable. After migration 050 and [commit 307ce86](https://github.com/al-unsoldgroup/krill-photo-library/commit/307ce86), the owner confirmed the MOV imported. On the Chromecast, a refreshed 12-item playlist played the video, adapted from 360 × 640 to 1080 × 1920, and then displayed a photo. The test restored the original shuffle and cache settings afterward.
 
+### Frame schedule and art cadence (UNS-1752, 5 November)
+
+The single dashboard window became a Schedule section in the TV settings. One rule sets the days, the start and end times, how often the dashboard appears and how long it stays. The default is the owner's target: weekdays from 07:00 until 18:00, the dashboard for one minute every five minutes, with photos and videos in between. After 18:00 and at weekends only pictures play. A window that crosses midnight belongs to the day it starts on; equal times mean the whole day; clearing every day turns the schedule off. An existing window carries over as every day with the dashboard on throughout, which was the old behaviour. The old disabled default takes the new weekday default.
+
+A manual change with up or down, or Back on the dashboard, holds until the schedule's next change, which is the next dashboard start or end. The schedule then resumes. The check runs every five seconds instead of fifteen so a one-minute slot stays accurate.
+
+Mixed mode can now space art as X percent of slides, one in every X slides, or every X minutes. The default is 30 percent, matching the plan's 70/30 balance; only an explicitly changed old percentage is kept.
+
+Twelve focused unit tests passed, covering the weekday and weekend boundaries, the 18:00 cutover, overnight windows, settings parsing and the cadence math. The beta debug APK built and the formatting check passed. Behaviour on the TV is not yet verified.
+
 ## Next experiments
 
 1. Finish reviewing the Krill integration and artwork import, then verify its authorized deployment and private image delivery.

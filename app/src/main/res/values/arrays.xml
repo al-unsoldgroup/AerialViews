@@ -1,7 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string-array name="frame_art_percent_entries"><item>0%</item><item>25%</item><item>50%</item><item>75%</item><item>100%</item></string-array>
-    <string-array name="frame_art_percent_values"><item>0</item><item>25</item><item>50</item><item>75</item><item>100</item></string-array>
+    <string-array name="frame_art_cadence_entries"><item>X percent of slides</item><item>One in every X slides</item><item>Every X minutes</item></string-array>
+    <string-array name="frame_art_cadence_values" translatable="false"><item>PERCENT</item><item>SLIDES</item><item>MINUTES</item></string-array>
+    <string-array name="frame_schedule_days_entries"><item>Monday</item><item>Tuesday</item><item>Wednesday</item><item>Thursday</item><item>Friday</item><item>Saturday</item><item>Sunday</item></string-array>
+    <string-array name="frame_schedule_days_values" translatable="false"><item>1</item><item>2</item><item>3</item><item>4</item><item>5</item><item>6</item><item>7</item></string-array>
+    <string-array name="frame_schedule_days_default" translatable="false"><item>1</item><item>2</item><item>3</item><item>4</item><item>5</item></string-array>
+    <string-array name="frame_schedule_interval_entries"><item>Stay on all hours</item><item>2 minutes</item><item>5 minutes</item><item>10 minutes</item><item>15 minutes</item><item>30 minutes</item><item>60 minutes</item></string-array>
+    <string-array name="frame_schedule_interval_values" translatable="false"><item>0</item><item>2</item><item>5</item><item>10</item><item>15</item><item>30</item><item>60</item></string-array>
+    <string-array name="frame_schedule_duration_entries"><item>1 minute</item><item>2 minutes</item><item>3 minutes</item><item>5 minutes</item><item>10 minutes</item></string-array>
+    <string-array name="frame_schedule_duration_values" translatable="false"><item>1</item><item>2</item><item>3</item><item>5</item><item>10</item></string-array>
     <!-- Apple Video Options -->
     <string-array name="apple_videos_quality_entries" translatable="false">
         <item>1080p H.264</item>

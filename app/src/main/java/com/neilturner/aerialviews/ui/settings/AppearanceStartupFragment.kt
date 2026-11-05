@@ -21,8 +21,15 @@ class AppearanceStartupFragment :
         savedInstanceState: Bundle?,
         rootKey: String?,
     ) {
+        GeneralPrefs.migrateFrameSchedule()
         setPreferencesFromResource(R.xml.settings_appearance_startup, rootKey)
-        listOf("frame_dashboard_url", "frame_dashboard_start", "frame_dashboard_end").forEach { key ->
+        findPreference<Preference>("frame_art_amount")?.setOnPreferenceChangeListener { _, value ->
+            val amount = (value as? String)?.trim()?.toIntOrNull()
+            val valid = amount != null && amount >= 0 && (GeneralPrefs.frameArtCadence != "PERCENT" || amount <= 100)
+            if (!valid) Toast.makeText(requireContext(), R.string.frame_art_invalid, Toast.LENGTH_LONG).show()
+            valid
+        }
+        listOf("frame_dashboard_url", "frame_schedule_start", "frame_schedule_end").forEach { key ->
             findPreference<Preference>(key)?.setOnPreferenceChangeListener { _, value ->
                 val text = (value as? String)?.trim().orEmpty()
                 val valid =

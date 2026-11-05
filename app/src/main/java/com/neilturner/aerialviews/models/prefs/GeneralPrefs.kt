@@ -17,14 +17,49 @@ import com.neilturner.aerialviews.models.enums.ProgressBarType
 import com.neilturner.aerialviews.models.enums.VideoScale
 import com.neilturner.aerialviews.services.weather.TemperatureUnit
 import com.neilturner.aerialviews.services.weather.WindSpeedUnit
+import com.neilturner.aerialviews.ui.core.DashboardConfig
 
 object GeneralPrefs : KotprefModel() {
     override val kotprefName = "${context.packageName}_preferences"
 
     var dashboardUrl by stringPref("", "frame_dashboard_url")
-    var dashboardScheduleStart by stringPref("00:00", "frame_dashboard_start")
-    var dashboardScheduleEnd by stringPref("00:00", "frame_dashboard_end")
-    var frameArtPercent by stringPref("50", "frame_art_percent")
+    val frameScheduleDays by stringSetPref("frame_schedule_days") { (1..5).map(Int::toString).toSortedSet() }
+    var frameScheduleStart by stringPref("07:00", "frame_schedule_start")
+    var frameScheduleEnd by stringPref("18:00", "frame_schedule_end")
+    var frameScheduleInterval by stringPref("5", "frame_schedule_interval")
+    var frameScheduleDuration by stringPref("1", "frame_schedule_duration")
+    var frameArtCadence by stringPref("PERCENT", "frame_art_cadence")
+    var frameArtAmount by stringPref("30", "frame_art_amount")
+
+    /**
+     * Moves the old single dashboard window and art percentage to the schedule settings. A real
+     * window keeps its times on every day with the dashboard up throughout, as before; the old
+     * disabled default (equal times) takes the new weekday default. Only a changed art percentage
+     * is kept, so the old 50 default becomes the new 30 default.
+     */
+    fun migrateFrameSchedule() {
+        val prefs = preferences
+        val oldKeys = listOf("frame_dashboard_start", "frame_dashboard_end", "frame_art_percent")
+        if (oldKeys.none(prefs::contains)) return
+        val start = prefs.getString("frame_dashboard_start", null)
+        val end = prefs.getString("frame_dashboard_end", null)
+        val percent = prefs.getString("frame_art_percent", null)
+        val edit = prefs.edit()
+        if (start != null && end != null && start != end && DashboardConfig.parseTime(start) != null &&
+            DashboardConfig.parseTime(end) != null
+        ) {
+            edit
+                .putStringSet("frame_schedule_days", (1..7).map(Int::toString).toSet())
+                .putString("frame_schedule_start", start)
+                .putString("frame_schedule_end", end)
+                .putString("frame_schedule_interval", "0")
+        }
+        if (percent != null && percent != "50") {
+            edit.putString("frame_art_cadence", "PERCENT").putString("frame_art_amount", percent)
+        }
+        oldKeys.forEach(edit::remove)
+        edit.apply()
+    }
 
     // Overlays - Top
     var slotTopLeft1 by nullableEnumValuePref(OverlayType.EMPTY, "slot_top_left1")
