@@ -35,6 +35,7 @@ data class PortraitPlanRow(
     val height: Int?,
     val tagsJson: String?,
     val pairedWithNext: Boolean?,
+    val pairPartner: String?,
 )
 
 @Dao
@@ -55,7 +56,7 @@ interface PlaylistCacheDao {
     suspend fun getAllMediaItemsOrdered(): List<CachedMediaEntity>
 
     @Query(
-        "SELECT id, playlistOrder, uri, type, source, timeOfDay, albumName, width, height, tagsJson, pairedWithNext FROM cached_media ORDER BY playlistOrder ASC",
+        "SELECT id, playlistOrder, uri, type, source, timeOfDay, albumName, width, height, tagsJson, pairedWithNext, pairPartner FROM cached_media ORDER BY playlistOrder ASC",
     )
     suspend fun getPortraitPlanRows(): List<PortraitPlanRow>
 

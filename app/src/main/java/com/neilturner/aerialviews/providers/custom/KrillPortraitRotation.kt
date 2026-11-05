@@ -1,6 +1,6 @@
 package com.neilturner.aerialviews.providers.custom
 
-/** Bring compatible future portraits together without dropping or replaying intervening items. */
+/** Bring server-paired future portraits together without dropping or replaying intervening items. */
 internal object KrillPortraitRotation {
     data class Item(
         val identity: String,
@@ -13,15 +13,15 @@ internal object KrillPortraitRotation {
     )
 
     /**
-     * Keep everything through [protectedThrough] unchanged, then find a partner within [lookAhead].
-     * Nonadjacent automatic pairings require shared tags; missing metadata stays in its original order.
+     * Keep everything through [protectedThrough] unchanged, then move each photo's Krill partner, if found within
+     * [lookAhead], directly after it. Photos without a partner keep their original order.
      */
     fun arrange(
         items: List<Item>,
         protectedThrough: Int,
         panelWidth: Int,
         panelHeight: Int,
-        lookAhead: Int = 500,
+        lookAhead: Int = Int.MAX_VALUE,
         checkpoint: () -> Unit = {},
         rejected: (Item, Item) -> Boolean = { _, _ -> false },
     ): Plan {
@@ -33,26 +33,19 @@ internal object KrillPortraitRotation {
             checkpoint()
             val primary = result[index]
             val photo = primary.portrait
-            if (photo == null || !KrillPortraitPairing.eligible(photo, panelWidth, panelHeight)) {
+            if (photo?.partner == null) {
                 index++
                 continue
             }
-            val end = minOf(result.size, index + lookAhead + 1)
-            val candidates =
-                result.subList(index + 1, end).filter { candidate ->
-                    val other = candidate.portrait
-                    other != null && KrillPortraitPairing.eligible(other, panelWidth, panelHeight) &&
-                        sharedTag(photo.tags, other.tags) && !rejected(primary, candidate)
+            val end = (index.toLong() + lookAhead + 1).coerceAtMost(result.size.toLong()).toInt()
+            var partnerIndex = -1
+            for (pos in index + 1 until end) {
+                val other = result[pos].portrait ?: continue
+                if (other.mediaId == photo.partner) {
+                    if (KrillPortraitPairing.isPair(photo, other, panelWidth, panelHeight) && !rejected(primary, result[pos])) partnerIndex = pos
+                    break
                 }
-            val selected = KrillPortraitPairing.choosePartner(photo, candidates.mapNotNull { it.portrait }, panelWidth, panelHeight)
-            val partnerIndex =
-                if (selected == null) {
-                    -1
-                } else {
-                    (index + 1 until end).firstOrNull { pos ->
-                        result[pos].portrait === selected
-                    } ?: -1
-                }
+            }
             if (partnerIndex < 0) {
                 index++
             } else {
@@ -62,13 +55,5 @@ internal object KrillPortraitRotation {
             }
         }
         return Plan(result, pairStarts)
-    }
-
-    private fun sharedTag(
-        first: List<String>,
-        second: List<String>,
-    ): Boolean {
-        fun normalize(tags: List<String>) = tags.map { it.trim().lowercase(java.util.Locale.ROOT) }.filter { it.isNotEmpty() }.toSet()
-        return normalize(first).intersect(normalize(second)).isNotEmpty()
     }
 }

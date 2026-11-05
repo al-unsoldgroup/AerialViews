@@ -250,7 +250,8 @@ class KrillPrivateFeedTest {
             server.enqueue(MockResponse().setBody("""{"spaces":[{"id":"mine","name":"My library"}]}"""))
             server.enqueue(
                 MockResponse().setBody(
-                    """{"total":2,"media":[{"id":"one","title":"First","width":3000,"height":2000,"tags":["Penguin","Trip"]}]}""",
+                    """{"total":2,"media":[{"id":"one","title":"First","width":3000,"height":2000,"tags":["Penguin","Trip"],""" +
+                        """"pair":{"partner_id":"two","score":0.9,"reason":"same_occasion: 4 min apart"}}]}""",
                 ),
             )
             server.enqueue(MockResponse().setBody("""{"total":2,"media":[{"id":"two","description":"Second"}]}"""))
@@ -262,6 +263,8 @@ class KrillPrivateFeedTest {
             assertEquals(2000, photos.first().height)
             assertEquals(listOf("Penguin", "Trip"), photos.first().tags)
             assertEquals(emptyList<String>(), photos.last().tags)
+            assertEquals("two", photos.first().pairPartner)
+            assertEquals(null, photos.last().pairPartner)
             assertEquals(null, photos.last().width)
             assertEquals(server.url("/api/frame/media/one/image?space=mine").toString(), photos.first().url)
             assertEquals("Bearer test-token", server.takeRequest().getHeader("Authorization"))

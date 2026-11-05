@@ -31,4 +31,5 @@ data class CachedMediaEntity(
     val height: Int? = null,
     val tagsJson: String? = null,
     val pairedWithNext: Boolean? = null,
+    val pairPartner: String? = null,
 )

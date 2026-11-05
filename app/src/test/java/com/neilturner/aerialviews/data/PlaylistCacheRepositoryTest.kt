@@ -66,7 +66,7 @@ internal class PlaylistCacheRepositoryTest {
                 AerialMedia(
                     uri,
                     type = AerialMediaType.IMAGE,
-                    metadata = AerialMediaMetadata(width = 1800, height = 3000, tags = listOf("Trip", "Penguin")),
+                    metadata = AerialMediaMetadata(width = 1800, height = 3000, tags = listOf("Trip", "Penguin"), pairPartner = "partner"),
                 )
             repository.cachePlaylist(listOf(media), null, HASH, false)
 
@@ -74,6 +74,7 @@ internal class PlaylistCacheRepositoryTest {
             assertEquals(1800, restored.metadata.width)
             assertEquals(3000, restored.metadata.height)
             assertEquals(listOf("Trip", "Penguin"), restored.metadata.tags)
+            assertEquals("partner", restored.metadata.pairPartner)
         }
 
     @Test

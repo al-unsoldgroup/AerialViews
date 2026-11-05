@@ -478,16 +478,11 @@ class ImagePlayerView : FrameLayout {
         if (!isPrivateKrillImage(first) || !isPrivateKrillImage(second)) return false
         val (width, height) = resolveTargetSize()
 
-        fun candidate(media: AerialMedia) =
-            KrillPortraitPairing.Photo(
-                media.uri.toString(),
-                media.metadata.width,
-                media.metadata.height,
-                media.metadata.albumName,
-                pairingTags(media),
-            )
-        return KrillPortraitPairing.choosePartner(candidate(first), listOf(candidate(second)), width / 2, height) != null
+        return KrillPortraitPairing.isPair(pairingPhoto(first), pairingPhoto(second), width / 2, height)
     }
+
+    private fun pairingPhoto(media: AerialMedia) =
+        KrillPortraitPairing.Photo(media.uri.toString(), media.metadata.width, media.metadata.height, media.metadata.pairPartner)
 
     internal suspend fun probePortraitPair(
         first: AerialMedia,
@@ -541,25 +536,8 @@ class ImagePlayerView : FrameLayout {
                         withContext(Dispatchers.IO) {
                             check(hasDisplayResolution(first, panel, fitInside = true)) { "First portrait is too small" }
                             check(hasDisplayResolution(second, panel, fitInside = true)) { "Second portrait is too small" }
-
-                            fun candidate(media: AerialMedia) =
-                                KrillPortraitPairing.Photo(
-                                    media.uri.toString(),
-                                    media.metadata.width,
-                                    media.metadata.height,
-                                    media.metadata.albumName,
-                                    pairingTags(media),
-                                )
-                            check(
-                                KrillPortraitPairing.choosePartner(
-                                    candidate(first),
-                                    listOf(candidate(second)),
-                                    panel.first,
-                                    panel.second,
-                                ) !=
-                                    null,
-                            ) {
-                                "Photos are not compatible portraits"
+                            check(KrillPortraitPairing.isPair(pairingPhoto(first), pairingPhoto(second), panel.first, panel.second)) {
+                                "Photos are not a Krill pair"
                             }
 
                             suspend fun load(
@@ -612,17 +590,6 @@ class ImagePlayerView : FrameLayout {
     }
 
     private fun isPrivateKrillImage(media: AerialMedia): Boolean = KrillPrivateFeed.isFrameImage(media.uri.toString())
-
-    private fun pairingTags(media: AerialMedia): List<String> =
-        if (BuildConfig.DEBUG &&
-            context
-                .getSharedPreferences("frame_debug", Context.MODE_PRIVATE)
-                .getBoolean("ignore_pair_tags_for_test", false)
-        ) {
-            emptyList()
-        } else {
-            media.metadata.tags
-        }
 
     private fun acquirePrivateAccess(
         media: AerialMedia,

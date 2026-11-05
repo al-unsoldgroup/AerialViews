@@ -10,7 +10,9 @@ import androidx.sqlite.driver.AndroidSQLiteDriver
 
 @Database(
     entities = [CachedMediaEntity::class, CachedMusicTrackEntity::class, PlaylistStateEntity::class],
-    version = 5,
+    // Version 6 adds Krill pair partners. It has no migration on purpose: the destructive fallback
+    // rebuilds the playlist cache from Krill so every cached photo carries its server pairing.
+    version = 6,
     exportSchema = true,
     autoMigrations = [
         AutoMigration(
