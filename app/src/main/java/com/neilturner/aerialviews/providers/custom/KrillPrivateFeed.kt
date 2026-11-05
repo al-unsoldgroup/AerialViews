@@ -268,6 +268,15 @@ internal class KrillPrivateFeed(
         @SerialName("uploaded_at") val uploadedAt: String? = null,
         val credit: String? = null,
         val tags: List<String> = emptyList(),
+        val pair: ServerPair? = null,
+    )
+
+    /** Server-chosen collage partner (UNS-1754); score and reason are informational. */
+    @Serializable
+    private data class ServerPair(
+        @SerialName("partner_id") val partnerId: String,
+        val score: Double? = null,
+        val reason: String? = null,
     )
 
     data class Item(
@@ -277,6 +286,7 @@ internal class KrillPrivateFeed(
         val height: Int?,
         val tags: List<String> = emptyList(),
         val video: Boolean = false,
+        val pairPartner: String? = null,
     )
 
     private fun get(
@@ -520,6 +530,7 @@ internal class KrillPrivateFeed(
                         photo.height,
                         photo.tags,
                         video,
+                        photo.pair?.partnerId?.takeIf { !video && it.isNotBlank() },
                     ),
                 )
             }

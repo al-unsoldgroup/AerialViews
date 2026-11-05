@@ -7,47 +7,58 @@ import org.junit.jupiter.api.Test
 class KrillPortraitRotationTest {
     private fun photo(
         id: String,
-        tags: List<String> = listOf("Trip"),
+        partner: String? = null,
         width: Int = 1200,
         height: Int = 1800,
-    ) = KrillPortraitRotation.Item(id, KrillPortraitPairing.Photo(id, width, height, tags = tags))
+    ) = KrillPortraitRotation.Item(
+        id,
+        KrillPortraitPairing.Photo("https://photos.example/api/frame/media/$id/image?space=mine", width, height, partner),
+    )
 
     @Test
-    fun `moves a compatible future portrait next to its partner without dropping intervening items`() {
-        val items = listOf(photo("a"), KrillPortraitRotation.Item("landscape"), photo("b"), photo("other", listOf("map")))
+    fun `moves the server partner next to its photo without dropping intervening items`() {
+        val items = listOf(photo("a", "b"), KrillPortraitRotation.Item("landscape"), photo("other"), photo("b", "a"))
         val plan = KrillPortraitRotation.arrange(items, -1, 960, 1080)
-        val result = plan.items
         assertEquals(setOf(0), plan.pairStarts)
-        assertEquals(listOf("a", "b", "landscape", "other"), result.map { it.identity })
-        assertEquals(items.map { it.identity }.sorted(), result.map { it.identity }.sorted())
-        assertEquals(result, KrillPortraitRotation.arrange(result, -1, 960, 1080).items)
+        assertEquals(listOf("a", "b", "landscape", "other"), plan.items.map { it.identity })
+        assertEquals(plan.items, KrillPortraitRotation.arrange(plan.items, -1, 960, 1080).items)
     }
 
     @Test
-    fun `never changes the already viewed prefix or moves nonportrait items`() {
-        val items = listOf(photo("seen"), KrillPortraitRotation.Item("other-space"), photo("future"), photo("partner"))
-        val result = KrillPortraitRotation.arrange(items, 1, 960, 1080).items
-        assertEquals(items.take(2), result.take(2))
-        assertEquals(listOf("seen", "other-space", "future", "partner"), result.map { it.identity })
+    fun `finds a partner far ahead in a large rotation`() {
+        val filler = List(4000) { photo("p$it") }
+        val plan = KrillPortraitRotation.arrange(listOf(photo("a", "b")) + filler + photo("b", "a"), -1, 960, 1080)
+        assertEquals(listOf("a", "b"), plan.items.take(2).map { it.identity })
+        assertEquals(4002, plan.items.size)
     }
 
     @Test
-    fun `respects tag evidence rejection size and lookahead`() {
-        val primary = photo("a")
-        val noTag = photo("untagged", emptyList())
-        val small = photo("small", width = 400, height = 700)
-        val rejected = photo("rejected")
-        val good = photo("good", tags = listOf(" trip "))
-        val items = listOf(primary, noTag, small, rejected, good)
-        val arranged = KrillPortraitRotation.arrange(items, -1, 960, 1080) { _, candidate -> candidate.identity == "rejected" }.items
-        assertEquals(listOf("a", "good", "untagged", "small", "rejected"), arranged.map { it.identity })
-        assertEquals(items, KrillPortraitRotation.arrange(items, -1, 960, 1080, lookAhead = 2).items)
+    fun `never pairs portraits without a server partner even when adjacent`() {
+        val items = listOf(photo("a"), photo("b"))
+        assertEquals(emptySet<Int>(), KrillPortraitRotation.arrange(items, -1, 960, 1080).pairStarts)
+    }
+
+    @Test
+    fun `never changes the already viewed prefix`() {
+        val items = listOf(photo("seen", "partner"), KrillPortraitRotation.Item("other"), photo("future"), photo("partner", "seen"))
+        val result = KrillPortraitRotation.arrange(items, 1, 960, 1080)
+        assertEquals(items, result.items)
+        assertEquals(emptySet<Int>(), result.pairStarts)
+    }
+
+    @Test
+    fun `respects one-sided pairs, rejection, resolution and lookahead`() {
+        val oneSided = listOf(photo("a", "b"), photo("b", "c"))
+        assertEquals(emptySet<Int>(), KrillPortraitRotation.arrange(oneSided, -1, 960, 1080).pairStarts)
+        val items = listOf(photo("a", "b"), photo("x"), photo("b", "a"))
+        assertEquals(items, KrillPortraitRotation.arrange(items, -1, 960, 1080) { _, candidate -> candidate.identity == "b" }.items)
+        assertEquals(items, KrillPortraitRotation.arrange(items, -1, 960, 1080, lookAhead = 1).items)
         assertEquals(items, KrillPortraitRotation.arrange(items, -1, 1920, 2160).items)
     }
 
     @Test
     fun `cancellation leaves the supplied rotation unchanged`() {
-        val items = listOf(photo("a"), KrillPortraitRotation.Item("landscape"), photo("b"), photo("c"))
+        val items = listOf(photo("a", "c"), KrillPortraitRotation.Item("landscape"), photo("b"), photo("c", "a"))
         val original = items.toList()
         var checks = 0
         assertThrows(java.util.concurrent.CancellationException::class.java) {
@@ -56,27 +67,5 @@ class KrillPortraitRotationTest {
             })
         }
         assertEquals(original, items)
-    }
-
-    @Test
-    fun `does not compare landscape photos as portrait candidates`() {
-        val landscapes = List(100) { photo("wide-$it", width = 2000, height = 1000) }
-        val items = landscapes + listOf(photo("a"), photo("b"))
-        var comparisons = 0
-        val plan =
-            KrillPortraitRotation.arrange(items, -1, 960, 1080) { _, _ ->
-                comparisons++
-                false
-            }
-        assertEquals(1, comparisons)
-        assertEquals(setOf(100), plan.pairStarts)
-    }
-
-    @Test
-    fun `explicit pair boundary prevents an untagged preceding photo stealing a planned partner`() {
-        val items = listOf(photo("untagged", emptyList()), photo("first"), photo("second"))
-        val plan = KrillPortraitRotation.arrange(items, -1, 960, 1080)
-        assertEquals(listOf("untagged", "first", "second"), plan.items.map { it.identity })
-        assertEquals(setOf(1), plan.pairStarts)
     }
 }

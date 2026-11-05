@@ -48,6 +48,7 @@ internal class FakePlaylistCacheDao : PlaylistCacheDao {
                 it.height,
                 it.tagsJson,
                 it.pairedWithNext,
+                it.pairPartner,
             )
         }
 

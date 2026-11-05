@@ -1,51 +1,36 @@
 package com.neilturner.aerialviews.providers.custom
 
-/** Select a compatible portrait without forcing a pair when there is no good candidate. */
+/**
+ * Krill chooses portrait partners on the server from same-trip or same-occasion evidence (UNS-1754).
+ * The frame only checks that both photos name each other and can fill half the panel without enlargement.
+ */
 internal object KrillPortraitPairing {
     data class Photo(
         val id: String,
         val width: Int?,
         val height: Int?,
-        val occasion: String? = null,
-        val tags: List<String> = emptyList(),
-    )
-
-    /** The dimensions are orientation-corrected pixels; [candidates] are in rotation order. */
-    fun choosePartner(
-        photo: Photo,
-        candidates: List<Photo>,
-        panelWidth: Int,
-        panelHeight: Int,
-    ): Photo? {
-        if (!eligible(photo, panelWidth, panelHeight)) return null
-        val primaryRatio = photo.width!!.toDouble() / photo.height!!
-        val occasion = photo.occasion?.trim()?.takeIf { it.isNotEmpty() }
-        val primaryTags = normalizeTags(photo.tags)
-        return candidates
-            .asSequence()
-            .filter { it.id != photo.id && eligible(it, panelWidth, panelHeight) }
-            .filter { candidate ->
-                val tags = normalizeTags(candidate.tags)
-                val sameOccasion = occasion != null && candidate.occasion?.trim() == occasion
-                primaryTags.isEmpty() || tags.isEmpty() || sameOccasion || primaryTags.any { it in tags }
-            }
-            // Very different shapes leave unequal visual weight in an uncropped composition.
-            .filter { candidate ->
-                val ratio = candidate.width!!.toDouble() / candidate.height!!
-                ratio / primaryRatio in 0.7..(1.0 / 0.7)
-            }.minWithOrNull(
-                compareBy<Photo> { candidate ->
-                    if (occasion != null && candidate.occasion?.trim() == occasion) 0 else 1
-                }.thenBy { candidate ->
-                    if (primaryTags.any { it in normalizeTags(candidate.tags) }) 0 else 1
-                }.thenBy { candidate ->
-                    kotlin.math.abs(candidate.width!!.toDouble() / candidate.height!! - primaryRatio)
-                },
-            )
+        /** Krill media ID of the server-chosen partner. */
+        val partner: String? = null,
+    ) {
+        val mediaId: String? by lazy { mediaIdOf(id) }
     }
 
-    private fun normalizeTags(tags: List<String>): Set<String> =
-        tags.map { it.trim().lowercase(java.util.Locale.ROOT) }.filter { it.isNotEmpty() }.toSet()
+    /** True only for a mutual server pairing of two eligible portraits; [panelWidth] is half the screen. */
+    fun isPair(
+        first: Photo,
+        second: Photo,
+        panelWidth: Int,
+        panelHeight: Int,
+    ): Boolean =
+        first.partner != null && first.partner == second.mediaId && second.partner == first.mediaId &&
+            eligible(first, panelWidth, panelHeight) && eligible(second, panelWidth, panelHeight)
+
+    /** Media ID from a frame image URL, `/api/frame/media/<id>/image?space=...`, without a full URL parse. */
+    internal fun mediaIdOf(uri: String): String? {
+        val start = uri.indexOf("/api/frame/media/").takeIf { it >= 0 }?.plus("/api/frame/media/".length) ?: return null
+        val end = uri.indexOf('/', start)
+        return if (end > start && uri.startsWith("/image", end)) uri.substring(start, end) else null
+    }
 
     internal fun eligible(
         photo: Photo,

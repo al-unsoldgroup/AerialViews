@@ -120,6 +120,7 @@ internal class KrillPrivateProvider(
                                     height = photo.height,
                                     tags = photo.tags,
                                     tagsKnown = true,
+                                    pairPartner = photo.pairPartner,
                                 ),
                         )
                     },

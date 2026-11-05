@@ -119,15 +119,9 @@ class PlaylistCacheRepository(
             val selectedIds = future.map { it.id }.toSet()
             val items =
                 media.map { item ->
-                    val tags =
-                        if (item.id in selectedIds) {
-                            item.tagsJson?.let { runCatching { Json.decodeFromString<List<String>>(it) }.getOrNull() }
-                        } else {
-                            null
-                        }
                     val portrait =
-                        if (item.id in selectedIds && item.type == AerialMediaType.IMAGE.name && tags != null) {
-                            KrillPortraitPairing.Photo(item.uri, item.width, item.height, item.albumName, tags)
+                        if (item.id in selectedIds && item.type == AerialMediaType.IMAGE.name) {
+                            KrillPortraitPairing.Photo(item.uri, item.width, item.height, item.pairPartner)
                         } else {
                             null
                         }
@@ -373,6 +367,7 @@ class PlaylistCacheRepository(
                     width = entity.width,
                     height = entity.height,
                     pairedWithNext = entity.pairedWithNext,
+                    pairPartner = entity.pairPartner,
                     tags = entity.tagsJson?.let { runCatching { Json.decodeFromString<List<String>>(it) }.getOrNull() } ?: emptyList(),
                     tagsKnown = entity.tagsJson != null,
                     exif =
@@ -423,6 +418,7 @@ class PlaylistCacheRepository(
                     height = m.metadata.height,
                     tagsJson = Json.encodeToString(m.metadata.tags),
                     pairedWithNext = m.metadata.pairedWithNext,
+                    pairPartner = m.metadata.pairPartner,
                 )
             }
 

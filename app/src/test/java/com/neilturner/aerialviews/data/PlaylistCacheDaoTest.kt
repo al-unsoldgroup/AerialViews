@@ -71,9 +71,9 @@ internal class PlaylistCacheDaoTest {
                     privatePhoto(0, "seen").copy(pairedWithNext = true),
                     video(1, TimeOfDay.NIGHT),
                     photo(2),
-                    privatePhoto(3, "a"),
+                    privatePhoto(3, "a").copy(pairPartner = "b"),
                     photo(4).copy(pairedWithNext = true),
-                    privatePhoto(5, "b"),
+                    privatePhoto(5, "b").copy(pairPartner = "a"),
                 )
             dao.updateCache(rows, emptyList(), state(7).copy(mediaPosition = 1))
             val dayFilter = TimeOfDayFilter.forPeriod(TimeOfDay.DAY, emptySet(), emptySet())
@@ -110,11 +110,11 @@ internal class PlaylistCacheDaoTest {
             )
             val rows =
                 listOf(
-                    privatePhoto(0, "current").copy(pairedWithNext = true),
-                    privatePhoto(1, "current-partner"),
-                    privatePhoto(2, "future"),
+                    privatePhoto(0, "current").copy(pairedWithNext = true, pairPartner = "current-partner"),
+                    privatePhoto(1, "current-partner").copy(pairPartner = "current"),
+                    privatePhoto(2, "future").copy(pairPartner = "future-partner"),
                     photo(3),
-                    privatePhoto(4, "future-partner"),
+                    privatePhoto(4, "future-partner").copy(pairPartner = "future"),
                 )
             dao.updateCache(rows, emptyList(), state(5).copy(mediaPosition = 0))
             assertTrue(repository.preparePortraitPlan("https://photos.example", "mine", "session", TimeOfDayFilter.ALL, 960, 1080))
@@ -181,6 +181,7 @@ internal class PlaylistCacheDaoTest {
                     width = null,
                     height = null,
                     tagsJson = "[\"trip\"]",
+                    pairPartner = "b",
                 )
             val partner =
                 unknown.copy(
@@ -188,6 +189,7 @@ internal class PlaylistCacheDaoTest {
                     uri = "https://photos.example/api/frame/media/b/image?space=mine",
                     width = 1200,
                     height = 1800,
+                    pairPartner = "a",
                 )
             dao.updateCache(listOf(unknown, partner), emptyList(), state(11))
             assertTrue(repository.preparePortraitPlan("https://photos.example", "mine", "session", TimeOfDayFilter.ALL, 960, 1080))
@@ -204,6 +206,7 @@ internal class PlaylistCacheDaoTest {
                         id = 0,
                         playlistOrder = index + 2,
                         uri = "https://photos.example/api/frame/media/x$index/image?space=mine",
+                        pairPartner = null,
                     )
                 }
             dao.insertMediaItems(extra)
