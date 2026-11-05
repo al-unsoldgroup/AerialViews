@@ -1,7 +1,9 @@
 package com.neilturner.aerialviews.ui.core
 
+import android.view.KeyEvent
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.time.DayOfWeek
@@ -9,6 +11,19 @@ import java.time.LocalDateTime
 import java.time.LocalTime
 
 class DashboardScheduleTest {
+    @Test
+    fun `remote keys map to dashboard navigation`() {
+        assertEquals(-1, DashboardConfig.navDirection(KeyEvent.KEYCODE_DPAD_LEFT))
+        assertEquals(1, DashboardConfig.navDirection(KeyEvent.KEYCODE_DPAD_RIGHT))
+        assertEquals(0, DashboardConfig.navDirection(KeyEvent.KEYCODE_DPAD_CENTER))
+        assertEquals(0, DashboardConfig.navDirection(KeyEvent.KEYCODE_ENTER))
+        assertNull(DashboardConfig.navDirection(KeyEvent.KEYCODE_DPAD_UP))
+        assertNull(DashboardConfig.navDirection(KeyEvent.KEYCODE_BACK))
+        assertEquals("window.frameNav&&window.frameNav(-1)", DashboardConfig.navScript(-1))
+        assertEquals("window.frameNav&&window.frameNav(1)", DashboardConfig.navScript(1))
+        assertEquals("window.frameNav&&window.frameNav(0)", DashboardConfig.navScript(0))
+    }
+
     @Test
     fun `validates dashboard URLs and local schedule times`() {
         assertTrue(DashboardConfig.validUrl("https://example.com/dashboard"))
