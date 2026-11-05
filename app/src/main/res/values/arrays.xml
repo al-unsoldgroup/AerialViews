@@ -1579,10 +1579,8 @@
         <item>BOTTOM_LEFT</item>
         <item>BOTTOM_RIGHT</item>
     </string-array>
+    <!-- Only the caption corner fades by default; the clock stays. -->
     <string-array name="overlay_fade_corners_default" translatable="false">
-        <item>TOP_LEFT</item>
-        <item>TOP_RIGHT</item>
-        <item>BOTTOM_LEFT</item>
         <item>BOTTOM_RIGHT</item>
     </string-array>
 

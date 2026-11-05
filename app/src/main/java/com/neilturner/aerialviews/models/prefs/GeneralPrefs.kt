@@ -203,8 +203,8 @@ object GeneralPrefs : KotprefModel() {
     var mediaFadeOutDuration by stringPref("800", "media_fade_out_duration")
 
     // Overlay Auto hide/reveal
-    var overlayVisibility by stringPref("ALWAYS_VISIBLE", "overlay_visibility")
-    var overlayVisibilityDelay by stringPref("4", "overlay_visibility_delay")
+    var overlayVisibility by stringPref("HIDE_AFTER_DELAY", "overlay_visibility")
+    var overlayVisibilityDelay by stringPref("8", "overlay_visibility_delay")
     var overlayRevealTimeout by stringPref("4", "overlay_reveal_timeout")
 
     // Per-corner fade settings (which corners should fade when auto-hide is enabled)
