@@ -123,6 +123,26 @@ internal object KrillCachedMetadataRefresh {
         }
     }
 
+    /** Bump when the caption text built from the feed changes, so upgraded devices refetch at once. */
+    internal const val CAPTION_SCHEMA = 2
+
+    internal fun captionRefreshKey(
+        namespace: String,
+        cachedAt: Long,
+        schema: Int = CAPTION_SCHEMA,
+    ): String =
+        MessageDigest
+            .getInstance("SHA-256")
+            .digest("v$schema:$namespace:$cachedAt".toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+
+    internal fun captionsFresh(
+        completedKey: String?,
+        completedAt: Long,
+        key: String,
+        now: Long,
+    ): Boolean = completedKey == key && completedAt > 0 && now >= completedAt && now - completedAt < 24 * 60 * 60 * 1000L
+
     fun refreshCaptions(
         context: Context,
         session: KrillTokenStore.Session,
@@ -136,16 +156,14 @@ internal object KrillCachedMetadataRefresh {
                     lease.onCancel { job.cancel() }
                     val dao = AerialDatabase.getInstance(context).playlistCacheDao()
                     val state = dao.getPlaylistState() ?: return@withLock
-                    val keyBytes =
-                        MessageDigest
-                            .getInstance("SHA-256")
-                            .digest("${session.cacheNamespace}:${state.cachedAt}".toByteArray(Charsets.UTF_8))
-                    val key = keyBytes.joinToString("") { "%02x".format(it.toInt() and 0xff) }
+                    val key = captionRefreshKey(session.cacheNamespace, state.cachedAt)
                     val prefs = context.getSharedPreferences("krill_caption_refresh", Context.MODE_PRIVATE)
-                    val refreshedAt = prefs.getLong("completed_at", 0L)
-                    val now = System.currentTimeMillis()
-                    if (prefs.getString("completed", null) == key && refreshedAt > 0 && now >= refreshedAt &&
-                        now - refreshedAt < 24 * 60 * 60 * 1000L
+                    if (captionsFresh(
+                            prefs.getString("completed", null),
+                            prefs.getLong("completed_at", 0L),
+                            key,
+                            System.currentTimeMillis(),
+                        )
                     ) {
                         val matches = KrillPrivateFeed.selectedImageMatcher(session.libraryOrigin, session.spaceId)
                         val cached =

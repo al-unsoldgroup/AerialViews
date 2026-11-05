@@ -1,5 +1,9 @@
 package com.neilturner.aerialviews.providers.custom
 
+import android.content.SharedPreferences
+import io.mockk.every
+import io.mockk.mockk
+import io.mockk.verify
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
@@ -54,5 +58,42 @@ class KrillCaptionTest {
         assertEquals("", KrillCaption.cleanLegacy("PXL_20261022_030718123.jpg • 2026-10-22T03:07:18.000+11:00"))
         assertEquals("Painting • Museum credit", KrillCaption.cleanLegacy("Painting • Museum credit • Painting"))
         assertEquals("Sunset at the pier", KrillCaption.cleanLegacy("Sunset at the pier"))
+    }
+
+    @Test
+    fun `saved photo selections lead with the Krill caption once`() {
+        assertEquals("PHOTO_CONTEXT,DATE_TAKEN", KrillCaption.withPhotoContextFirst("DATE_TAKEN"))
+        assertEquals(
+            "PHOTO_CONTEXT,DESCRIPTION,LOCATION,DATE_TAKEN",
+            KrillCaption.withPhotoContextFirst("PHOTO_CONTEXT,DESCRIPTION,LOCATION,DATE_TAKEN"),
+        )
+        assertEquals("PHOTO_CONTEXT,LOCATION,DATE_TAKEN", KrillCaption.withPhotoContextFirst("LOCATION, PHOTO_CONTEXT ,DATE_TAKEN"))
+        assertEquals("", KrillCaption.withPhotoContextFirst(""))
+    }
+
+    @Test
+    fun `overlay migration runs once and leaves unsaved and empty selections alone`() {
+        val editor = mockk<SharedPreferences.Editor>(relaxed = true)
+        every { editor.putString(any(), any()) } returns editor
+        every { editor.putBoolean(any(), any()) } returns editor
+        val prefs = mockk<SharedPreferences>()
+        every { prefs.getBoolean("krill_caption_overlays_migrated", false) } returns false
+        every { prefs.edit() } returns editor
+        every { prefs.getString(any(), null) } returns null
+        every { prefs.getString("overlay_metadata1_photos", null) } returns "PHOTO_CONTEXT,DESCRIPTION,LOCATION,DATE_TAKEN"
+        every { prefs.getString("overlay_metadata4_photos", null) } returns "DATE_TAKEN"
+        every { prefs.getString("overlay_metadata3_photos", null) } returns ""
+        KrillCaption.migrateOverlayPrefs(prefs)
+        verify { editor.putString("overlay_metadata4_photos", "PHOTO_CONTEXT,DATE_TAKEN") }
+        verify { editor.putString("overlay_metadata1_photos", "PHOTO_CONTEXT,DESCRIPTION,LOCATION,DATE_TAKEN") }
+        verify { editor.putString("overlay_metadata3_photos", "") }
+        verify(exactly = 0) { editor.putString("overlay_metadata2_photos", any()) }
+        verify { editor.putBoolean("krill_caption_overlays_migrated", true) }
+        verify { editor.apply() }
+
+        val done = mockk<SharedPreferences>()
+        every { done.getBoolean("krill_caption_overlays_migrated", false) } returns true
+        KrillCaption.migrateOverlayPrefs(done)
+        verify(exactly = 0) { done.edit() }
     }
 }

@@ -362,6 +362,7 @@ class ScreenController(
         // A manual change (D-pad or Back) holds until the schedule's next change, which is the next
         // dashboard start or end. Then the schedule takes over again.
         GeneralPrefs.migrateFrameSchedule()
+        GeneralPrefs.migrateKrillCaptionOverlays()
         dashboardScheduleJob =
             mainScope.launch {
                 while (isActive) {

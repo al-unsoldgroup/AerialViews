@@ -1,5 +1,6 @@
 package com.neilturner.aerialviews.providers.custom
 
+import android.content.SharedPreferences
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
@@ -54,6 +55,25 @@ internal object KrillCaption {
                     (part.length >= 60 && part.none(Char::isWhitespace) && part.count { it == '-' || it == '_' } >= 3)
             }.distinct()
             .joinToString(" • ")
+
+    /** Saved photo selections lead with the Krill caption; an empty (disabled) selection stays empty. */
+    fun withPhotoContextFirst(selection: String): String {
+        val entries = selection.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        if (entries.isEmpty()) return selection
+        return (listOf("PHOTO_CONTEXT") + entries.filterNot { it.equals("PHOTO_CONTEXT", ignoreCase = true) }).joinToString(",")
+    }
+
+    fun migrateOverlayPrefs(prefs: SharedPreferences) {
+        if (prefs.getBoolean(OVERLAYS_MIGRATED, false)) return
+        val edit = prefs.edit()
+        (1..4).forEach { slot ->
+            val key = "overlay_metadata${slot}_photos"
+            prefs.getString(key, null)?.let { edit.putString(key, withPhotoContextFirst(it)) }
+        }
+        edit.putBoolean(OVERLAYS_MIGRATED, true).apply()
+    }
+
+    private const val OVERLAYS_MIGRATED = "krill_caption_overlays_migrated"
 
     private fun String?.clean(): String? = this?.trim()?.takeIf { it.isNotEmpty() }
 }
