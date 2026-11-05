@@ -140,6 +140,7 @@ class ScreenController(
     private var frameMode = FrameMode.PHOTOS
     private var frameModeActive = false
     private var mixedSlide = 0L
+    private var lastArtAt = 0L
     private val frameModeHistory = FrameModeHistory()
     private var playlistReadFailures = 0
 
@@ -358,12 +359,21 @@ class ScreenController(
         KrillFrameCache.addInvalidationListener(cacheInvalidation)
         DreamTiming.mark("screen.built")
 
+        // A manual change (D-pad or Back) holds until the schedule's next change, which is the next
+        // dashboard start or end. Then the schedule takes over again.
+        GeneralPrefs.migrateFrameSchedule()
         dashboardScheduleJob =
             mainScope.launch {
                 while (isActive) {
-                    val start = DashboardConfig.parseTime(GeneralPrefs.dashboardScheduleStart.trim())
-                    val end = DashboardConfig.parseTime(GeneralPrefs.dashboardScheduleEnd.trim())
-                    val active = start != null && end != null && DashboardSchedule(start, end).includes(java.time.LocalTime.now())
+                    val active =
+                        DashboardSchedule
+                            .from(
+                                GeneralPrefs.frameScheduleDays,
+                                GeneralPrefs.frameScheduleStart,
+                                GeneralPrefs.frameScheduleEnd,
+                                GeneralPrefs.frameScheduleInterval,
+                                GeneralPrefs.frameScheduleDuration,
+                            )?.dashboardDue(java.time.LocalDateTime.now()) == true
                     if (active != lastDashboardScheduleState) {
                         lastDashboardScheduleState = active
                         dashboardManuallyClosed = false
@@ -379,7 +389,7 @@ class ScreenController(
                     ) {
                         showDashboard()
                     }
-                    delay(15_000)
+                    delay(5_000)
                 }
             }
 
@@ -1179,8 +1189,7 @@ class ScreenController(
             return
         }
         val mode = frameMode
-        val slide = mixedSlide
-        val percent = GeneralPrefs.frameArtPercent.toIntOrNull() ?: 50
+        val mixedTarget = mixedTarget()
         val uris = frameModeUris
         val revision = frameModeMetadataRevision
         val historyPosition = if (previous) frameModeHistory.peekPrevious() else frameModeHistory.peekNext()
@@ -1203,7 +1212,7 @@ class ScreenController(
                                         val category = index.categoryAt(it)
                                         it !in tried && category != null && FrameModePolicy.accepts(mode, category)
                                     }
-                                        ?: index.next(mode, originalPosition, previous, slide, percent) { it !in tried }
+                                        ?: index.next(mode, originalPosition, previous, mixedTarget) { it !in tried }
                                         ?: break
                                 tried.add(position)
                                 val candidate = playlist.itemAt(position) ?: continue
@@ -1262,7 +1271,10 @@ class ScreenController(
                 frameModeHistory.recordPrevious(selectedChoice.position)
             } else {
                 frameModeHistory.record(selectedChoice.position)
-                if (mode == FrameMode.MIXED) mixedSlide++
+                if (mode == FrameMode.MIXED) {
+                    mixedSlide++
+                    if (index.categoryAt(selectedChoice.position) == FrameCategory.ART) lastArtAt = android.os.SystemClock.elapsedRealtime()
+                }
             }
             presentSelectedMedia(selected, previous, navigation, restoreHistoryPair = selectedChoice.fromHistory)
         }
@@ -1397,7 +1409,7 @@ class ScreenController(
         val slide = mixedSlide
         val position =
             frameModeHistory.peekNext()
-                ?: index.next(mode, origin, false, slide, GeneralPrefs.frameArtPercent.toIntOrNull() ?: 50)
+                ?: index.next(mode, origin, false, mixedTarget())
                 ?: return
         val expectedUri = frameModeUris.getOrNull(position) ?: return
         mainScope.launch {
@@ -2065,6 +2077,14 @@ class ScreenController(
             event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER
     }
 
+    private fun mixedTarget(): FrameCategory =
+        FrameModePolicy.mixedTarget(
+            runCatching { ArtCadence.valueOf(GeneralPrefs.frameArtCadence) }.getOrDefault(ArtCadence.PERCENT),
+            GeneralPrefs.frameArtAmount.trim().toIntOrNull() ?: 30,
+            mixedSlide,
+            android.os.SystemClock.elapsedRealtime() - lastArtAt,
+        )
+
     private fun changeFrameMode(forward: Boolean) {
         val index = frameModeIndex
         if (index == null || frameModeMetadataRevision != playlist.metadataRevision) {
@@ -2106,6 +2126,7 @@ class ScreenController(
                 frameMode = next
                 frameModeActive = true
                 mixedSlide = 0
+                lastArtAt = android.os.SystemClock.elapsedRealtime()
                 frameModePreload = null
                 Timber.i("Frame mode selected: $next")
                 frameModeHistory.clear()

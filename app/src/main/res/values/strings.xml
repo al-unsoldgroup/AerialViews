@@ -1,6 +1,16 @@
 <resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation" tools:locale="en">
     <string name="frame_modes_title">Picture frame modes</string>
-    <string name="frame_art_percent">Art in mixed mode</string>
+    <string name="frame_art_cadence">Art in mixed mode</string>
+    <string name="frame_art_amount">Art amount (X)</string>
+    <string name="frame_art_invalid">Enter a whole number. Percent must be 0 to 100.</string>
+    <string name="frame_schedule_title">Schedule</string>
+    <string name="frame_schedule_summary">Shows the dashboard at set times; pictures play in between and outside these hours. Up or down overrides until the next scheduled change.</string>
+    <string name="frame_schedule_days">Dashboard days</string>
+    <string name="frame_schedule_days_summary">Clear every day to turn the schedule off.</string>
+    <string name="frame_schedule_start">Dashboard hours start (HH:mm)</string>
+    <string name="frame_schedule_end">Dashboard hours end (HH:mm)</string>
+    <string name="frame_schedule_interval">Show the dashboard every</string>
+    <string name="frame_schedule_duration">Keep the dashboard on screen for</string>
     <string name="frame_mode_loading">Preparing picture modes</string>
     <string name="frame_mode_unavailable">Picture modes are unavailable. Retrying in the background.</string>
     <string name="frame_mode_photos">Photos</string>
@@ -11,9 +21,6 @@
     <string name="frame_dashboard_title">Dashboard</string>
     <string name="frame_dashboard_url">Dashboard URL</string>
     <string name="frame_dashboard_url_summary">Enter an HTTPS page. Up or down switches between the dashboard and pictures.</string>
-    <string name="frame_dashboard_start">Dashboard schedule start</string>
-    <string name="frame_dashboard_end">Dashboard schedule end</string>
-    <string name="frame_dashboard_time_summary">Local time in HH:mm. Equal times disable the schedule.</string>
     <string name="frame_dashboard_invalid">Enter a valid HTTPS URL or time in HH:mm.</string>
     <string name="krill_source_title">Krill photos</string>
     <string name="krill_source_summary">Sign in to a private Krill library</string>

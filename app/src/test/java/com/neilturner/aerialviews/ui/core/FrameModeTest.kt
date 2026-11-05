@@ -17,18 +17,18 @@ class FrameModeTest {
     @Test
     fun `mode selection preserves order wraps and skips excluded items`() {
         val index = FrameModeIndex(listOf(FrameCategory.PHOTO, FrameCategory.ART, FrameCategory.UNKNOWN, FrameCategory.ART))
-        assertEquals(2, index.next(FrameMode.PHOTOS, 0, false, 0, 50))
-        assertEquals(0, index.next(FrameMode.PHOTOS, 2, false, 0, 50))
-        assertEquals(3, index.next(FrameMode.ART, 1, false, 0, 50))
-        assertEquals(1, index.next(FrameMode.ART, 1, true, 0, 50) { it != 3 })
-        assertEquals(3, index.next(FrameMode.MIXED, 2, false, 1, 50))
+        assertEquals(2, index.next(FrameMode.PHOTOS, 0, false))
+        assertEquals(0, index.next(FrameMode.PHOTOS, 2, false))
+        assertEquals(3, index.next(FrameMode.ART, 1, false))
+        assertEquals(1, index.next(FrameMode.ART, 1, true) { it != 3 })
+        assertEquals(3, index.next(FrameMode.MIXED, 2, false, FrameCategory.ART))
     }
 
     @Test
     fun `mixed mode falls back when a category is unavailable`() {
         val index = FrameModeIndex(listOf(FrameCategory.PHOTO, FrameCategory.UNKNOWN))
-        assertEquals(1, index.next(FrameMode.MIXED, 0, false, 1, 50))
-        assertEquals(null, index.next(FrameMode.ART, 0, false, 0, 50))
+        assertEquals(1, index.next(FrameMode.MIXED, 0, false, FrameCategory.ART))
+        assertEquals(null, index.next(FrameMode.ART, 0, false))
     }
 
     @Test
@@ -47,5 +47,17 @@ class FrameModeTest {
         }
         assertEquals(FrameCategory.PHOTO, FrameModePolicy.mixedTarget(0, -1))
         assertEquals(FrameCategory.ART, FrameModePolicy.mixedTarget(0, 101))
+    }
+
+    @Test
+    fun `art cadence by slides minutes and percent`() {
+        val slides = (0L until 10L).filter { FrameModePolicy.mixedTarget(ArtCadence.SLIDES, 5, it, 0) == FrameCategory.ART }
+        assertEquals(listOf(4L, 9L), slides)
+        assertEquals(FrameCategory.PHOTO, FrameModePolicy.mixedTarget(ArtCadence.SLIDES, 0, 4, 0))
+        assertEquals(FrameCategory.PHOTO, FrameModePolicy.mixedTarget(ArtCadence.MINUTES, 3, 0, 179_999))
+        assertEquals(FrameCategory.ART, FrameModePolicy.mixedTarget(ArtCadence.MINUTES, 3, 0, 180_000))
+        assertEquals(FrameCategory.PHOTO, FrameModePolicy.mixedTarget(ArtCadence.MINUTES, 0, 0, Long.MAX_VALUE))
+        val percent = (0L until 100L).count { FrameModePolicy.mixedTarget(ArtCadence.PERCENT, 30, it, 0) == FrameCategory.ART }
+        assertEquals(30, percent)
     }
 }
