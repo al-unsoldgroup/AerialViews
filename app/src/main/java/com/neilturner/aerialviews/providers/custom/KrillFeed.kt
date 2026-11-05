@@ -136,7 +136,12 @@ internal object KrillFeed {
                                 fragment("frame-auto")
                             }
                         }.build()
-                result.add(Item(imageUrl.toString(), photo.title?.takeIf { it.isNotBlank() } ?: photo.description.orEmpty()))
+                result.add(
+                    Item(
+                        imageUrl.toString(),
+                        KrillCaption.cleanLegacy(photo.title?.takeIf { it.isNotBlank() } ?: photo.description.orEmpty()),
+                    ),
+                )
             }
             check(!page.hasMore || page.data.isNotEmpty()) { "Krill pagination did not advance" }
             offset += page.data.size

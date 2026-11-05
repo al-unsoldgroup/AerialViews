@@ -15,6 +15,7 @@ import com.neilturner.aerialviews.models.enums.PlaylistAudioMode
 import com.neilturner.aerialviews.models.enums.ProgressBarLocation
 import com.neilturner.aerialviews.models.enums.ProgressBarType
 import com.neilturner.aerialviews.models.enums.VideoScale
+import com.neilturner.aerialviews.providers.custom.KrillCaption
 import com.neilturner.aerialviews.services.weather.TemperatureUnit
 import com.neilturner.aerialviews.services.weather.WindSpeedUnit
 import com.neilturner.aerialviews.ui.core.DashboardConfig
@@ -30,6 +31,13 @@ object GeneralPrefs : KotprefModel() {
     var frameScheduleDuration by stringPref("1", "frame_schedule_duration")
     var frameArtCadence by stringPref("PERCENT", "frame_art_cadence")
     var frameArtAmount by stringPref("30", "frame_art_amount")
+
+    /**
+     * Once per install, lead every saved photo-metadata selection with PHOTO_CONTEXT, so Krill photos
+     * show their caption (place and time, or artwork) instead of a bare compact DATE_TAKEN. Unsaved
+     * selections already use the default, and overlay slots such as the clock are untouched.
+     */
+    fun migrateKrillCaptionOverlays() = KrillCaption.migrateOverlayPrefs(preferences)
 
     /**
      * Moves the old single dashboard window and art percentage to the schedule settings. A real
@@ -203,8 +211,8 @@ object GeneralPrefs : KotprefModel() {
     var mediaFadeOutDuration by stringPref("800", "media_fade_out_duration")
 
     // Overlay Auto hide/reveal
-    var overlayVisibility by stringPref("ALWAYS_VISIBLE", "overlay_visibility")
-    var overlayVisibilityDelay by stringPref("4", "overlay_visibility_delay")
+    var overlayVisibility by stringPref("HIDE_AFTER_DELAY", "overlay_visibility")
+    var overlayVisibilityDelay by stringPref("8", "overlay_visibility_delay")
     var overlayRevealTimeout by stringPref("4", "overlay_reveal_timeout")
 
     // Per-corner fade settings (which corners should fade when auto-hide is enabled)

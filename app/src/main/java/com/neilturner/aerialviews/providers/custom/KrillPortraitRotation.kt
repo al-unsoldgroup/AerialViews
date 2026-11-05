@@ -42,7 +42,11 @@ internal object KrillPortraitRotation {
             for (pos in index + 1 until end) {
                 val other = result[pos].portrait ?: continue
                 if (other.mediaId == photo.partner) {
-                    if (KrillPortraitPairing.isPair(photo, other, panelWidth, panelHeight) && !rejected(primary, result[pos])) partnerIndex = pos
+                    if (KrillPortraitPairing.isPair(photo, other, panelWidth, panelHeight) &&
+                        !rejected(primary, result[pos])
+                    ) {
+                        partnerIndex = pos
+                    }
                     break
                 }
             }

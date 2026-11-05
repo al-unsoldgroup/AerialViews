@@ -268,6 +268,13 @@ internal class KrillPrivateFeed(
         @SerialName("uploaded_at") val uploadedAt: String? = null,
         val credit: String? = null,
         val tags: List<String> = emptyList(),
+        @SerialName("place_attraction") val placeAttraction: String? = null,
+        @SerialName("place_neighborhood") val placeNeighborhood: String? = null,
+        @SerialName("place_city") val placeCity: String? = null,
+        @SerialName("place_country") val placeCountry: String? = null,
+        @SerialName("captured_local") val capturedLocal: String? = null,
+        @SerialName("artwork_title") val artworkTitle: String? = null,
+        @SerialName("artwork_artist") val artworkArtist: String? = null,
         val pair: ServerPair? = null,
     )
 
@@ -521,11 +528,17 @@ internal class KrillPrivateFeed(
                 result.add(
                     Item(
                         url.toString(),
-                        listOfNotNull(photo.title, photo.credit, photo.description)
-                            .map { it.trim() }
-                            .filter { it.isNotEmpty() }
-                            .distinct()
-                            .joinToString(" • "),
+                        KrillCaption.format(
+                            KrillCaption.Fields(
+                                photo.placeAttraction,
+                                photo.placeNeighborhood,
+                                photo.placeCity,
+                                photo.placeCountry,
+                                photo.capturedLocal,
+                                photo.artworkTitle,
+                                photo.artworkArtist,
+                            ),
+                        ) ?: KrillCaption.cleanLegacy(listOfNotNull(photo.title, photo.credit, photo.description).joinToString(" • ")),
                         photo.width,
                         photo.height,
                         photo.tags,

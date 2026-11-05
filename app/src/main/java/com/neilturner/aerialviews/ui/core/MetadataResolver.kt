@@ -8,6 +8,7 @@ import com.neilturner.aerialviews.models.enums.DateType
 import com.neilturner.aerialviews.models.enums.LocationType
 import com.neilturner.aerialviews.models.enums.MetadataType
 import com.neilturner.aerialviews.models.videos.AerialMedia
+import com.neilturner.aerialviews.providers.custom.KrillCaption
 import com.neilturner.aerialviews.ui.helpers.DateHelper
 import com.neilturner.aerialviews.ui.helpers.GeocoderHelper
 import com.neilturner.aerialviews.utils.filenameWithoutExtension
@@ -117,6 +118,10 @@ internal class MetadataResolver(
             when (entry) {
                 "PHOTO_CONTEXT" -> {
                     val caption = resolveSharedMetadata(context, media, "DESCRIPTION", preferences)?.text
+                    // Krill captions already carry verified place and time; adding EXIF would repeat them.
+                    if (media.source == AerialMediaSource.KRILL && !caption.isNullOrBlank()) {
+                        return ResolvedMetadata(caption, emptyMap(), MetadataType.STATIC)
+                    }
                     val location = withTimeoutOrNull(3_000) { resolveSharedMetadata(context, media, "LOCATION", preferences)?.text }
                     val date = resolveSharedMetadata(context, media, "DATE_TAKEN", preferences)?.text
                     val detail = listOfNotNull(location, date).filter { it.isNotBlank() }.distinct().joinToString(" • ")
@@ -198,10 +203,7 @@ internal class MetadataResolver(
                 val krillCaption =
                     media.metadata.shortDescription
                         .takeIf { media.source == AerialMediaSource.KRILL && media.type == AerialMediaType.IMAGE }
-                        ?.split(" • ")
-                        ?.filterNot { part ->
-                            part.length >= 60 && part.none(Char::isWhitespace) && part.count { it == '-' || it == '_' } >= 3
-                        }?.joinToString(" • ")
+                        ?.let(KrillCaption::cleanLegacy)
                 (krillCaption?.takeIf { it.isNotBlank() } ?: media.metadata.exif.description)
                     ?.trim()
                     ?.takeIf { it.isNotBlank() }

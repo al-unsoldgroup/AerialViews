@@ -150,13 +150,13 @@ internal class MetadataResolverTest {
         }
 
     @Test
-    fun `photo context combines artwork caption location and capture date`(): Unit =
+    fun `Krill photo context shows its verified caption without repeating EXIF`(): Unit =
         runTest {
             val media =
                 createMedia(
                     type = AerialMediaType.IMAGE,
                     source = AerialMediaSource.KRILL,
-                    shortDesc = "Painting • Artist",
+                    shortDesc = "Painting\nArtist",
                     city = "Paris",
                     country = "France",
                     date = "2020:01:02 12:00:00",
@@ -168,7 +168,29 @@ internal class MetadataResolverTest {
                     photoDateType = DateType.CUSTOM,
                     photoDateCustom = "yyyy-MM-dd",
                 )
-            assertEquals("Painting • Artist\nParis, France • 2020-01-02", resolver.resolve(context, media, prefs).text)
+            assertEquals("Painting\nArtist", resolver.resolve(context, media, prefs).text)
+        }
+
+    @Test
+    fun `Krill photo context never shows a file name or raw timestamp and falls back to EXIF`(): Unit =
+        runTest {
+            val media =
+                createMedia(
+                    type = AerialMediaType.IMAGE,
+                    source = AerialMediaSource.KRILL,
+                    shortDesc = "IMG_1234.HEIC • 2026-10-22T03:07:18Z",
+                    city = "Paris",
+                    country = "France",
+                    date = "2020:01:02 12:00:00",
+                )
+            val prefs =
+                defaultPrefs.copy(
+                    photoSelection = "PHOTO_CONTEXT",
+                    photoLocationType = LocationType.CITY_COUNTRY,
+                    photoDateType = DateType.CUSTOM,
+                    photoDateCustom = "yyyy-MM-dd",
+                )
+            assertEquals("Paris, France • 2020-01-02", resolver.resolve(context, media, prefs).text)
         }
 
     @Test
@@ -177,8 +199,7 @@ internal class MetadataResolverTest {
             val media =
                 createMedia(
                     type = AerialMediaType.IMAGE,
-                    source = AerialMediaSource.KRILL,
-                    shortDesc = "Painting",
+                    description = "Painting",
                     date = "2020:01:02 12:00:00",
                 )
             media.metadata.exif.latitude = 41.0

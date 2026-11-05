@@ -4,7 +4,7 @@
 
         <PreferenceCategory app:title="@string/category_options">
                 <ListPreference
-                    app:defaultValue="ALWAYS_VISIBLE"
+                    app:defaultValue="HIDE_AFTER_DELAY"
                     app:entries="@array/overlay_visibility_entries"
                     app:entryValues="@array/overlay_visibility_values"
                     app:key="overlay_visibility"
@@ -12,7 +12,7 @@
                     app:useSimpleSummaryProvider="true" />
 
                 <ListPreference
-                    app:defaultValue="4"
+                    app:defaultValue="8"
                     app:entries="@array/overlay_reveal_timeout_entries"
                     app:entryValues="@array/overlay_reveal_timeout_values"
                     app:key="overlay_visibility_delay"
