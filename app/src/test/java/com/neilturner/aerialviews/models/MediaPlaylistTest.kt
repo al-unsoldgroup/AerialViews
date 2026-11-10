@@ -210,6 +210,29 @@ internal class MediaPlaylistTest {
     }
 
     @Test
+    fun `pairing refresh adds and removes the art tag on an item already in the window`() {
+        val uri = mockk<Uri>()
+        every { uri.toString() } returns "https://example/photo"
+        val item =
+            AerialMedia(uri, source = AerialMediaSource.KRILL, metadata = AerialMediaMetadata(tags = listOf("trip"), tagsKnown = true))
+        val playlist = MediaPlaylist(listOf(item), startPosition = 0)
+        val start = playlist.metadataRevision
+        val marked = AerialMedia(uri, source = AerialMediaSource.KRILL, metadata = AerialMediaMetadata(tags = listOf("trip", "art")))
+        playlist.updateCachedPairing(listOf(marked))
+        assertEquals(listOf("trip", "art"), item.metadata.tags)
+        assertTrue(playlist.metadataRevision > start)
+        val afterMark = playlist.metadataRevision
+        playlist.updateCachedPairing(listOf(marked))
+        assertEquals(afterMark, playlist.metadataRevision)
+        playlist.updateCachedPairing(
+            listOf(AerialMedia(uri, source = AerialMediaSource.KRILL, metadata = AerialMediaMetadata(tags = listOf("trip")))),
+        )
+        assertEquals(listOf("trip"), item.metadata.tags)
+        assertTrue(playlist.metadataRevision > afterMark)
+        assertEquals(0, playlist.currentPosition)
+    }
+
+    @Test
     fun `debug seek starts at the following playlist entry`() {
         val first = testMedia()
         val second = testMedia()

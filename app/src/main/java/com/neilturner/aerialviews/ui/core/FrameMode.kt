@@ -34,6 +34,14 @@ internal object FrameModePolicy {
         }
     }
 
+    /** Art keeps its whole composition (fit on a matte) unless the owner set a manual crop point. */
+    fun fitsArt(
+        tags: List<String>,
+        tagsKnown: Boolean,
+        focusX: Float?,
+        focusY: Float?,
+    ): Boolean = category(tags, tagsKnown) == FrameCategory.ART && (focusX == null || focusY == null)
+
     fun mixedTarget(
         cadence: ArtCadence,
         amount: Int,

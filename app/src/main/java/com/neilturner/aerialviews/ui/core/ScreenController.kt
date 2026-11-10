@@ -1382,12 +1382,15 @@ class ScreenController(
             val start = playlist.currentPosition
             val first = media
             val next = playlist.peekNextItem { true }?.takeIf { !isExcludedFromRotation(it) }
+            // Art is shown whole, never cropped into a collage panel (UNS-1750).
             val compatibleMode =
-                next != null && (
-                    !frameModeActive ||
-                        FrameModePolicy.category(first.metadata.tags, first.metadata.tagsKnown) ==
-                        FrameModePolicy.category(next.metadata.tags, next.metadata.tagsKnown)
-                )
+                next != null &&
+                    FrameModePolicy.category(first.metadata.tags, first.metadata.tagsKnown) != FrameCategory.ART &&
+                    FrameModePolicy.category(next.metadata.tags, next.metadata.tagsKnown) != FrameCategory.ART && (
+                        !frameModeActive ||
+                            FrameModePolicy.category(first.metadata.tags, first.metadata.tagsKnown) ==
+                            FrameModePolicy.category(next.metadata.tags, next.metadata.tagsKnown)
+                    )
             if (first.metadata.pairedWithNext != false && next != null && compatibleMode &&
                 KrillPrivateFeed.isFrameImage(first.uri.toString()) && KrillPrivateFeed.isFrameImage(next.uri.toString())
             ) {
@@ -1409,11 +1412,13 @@ class ScreenController(
                             var third: AerialMedia? = null
                             val possibleThird = playlist.peekNextItem { true }
                             val thirdModeMatches =
-                                possibleThird != null && (
-                                    !frameModeActive ||
-                                        FrameModePolicy.category(first.metadata.tags, first.metadata.tagsKnown) ==
-                                        FrameModePolicy.category(possibleThird.metadata.tags, possibleThird.metadata.tagsKnown)
-                                )
+                                possibleThird != null &&
+                                    FrameModePolicy.category(possibleThird.metadata.tags, possibleThird.metadata.tagsKnown) !=
+                                    FrameCategory.ART && (
+                                        !frameModeActive ||
+                                            FrameModePolicy.category(first.metadata.tags, first.metadata.tagsKnown) ==
+                                            FrameModePolicy.category(possibleThird.metadata.tags, possibleThird.metadata.tagsKnown)
+                                    )
                             if (possibleThird != null && thirdModeMatches && !isExcludedFromRotation(possibleThird) &&
                                 !isTripleRejected(first, candidate, possibleThird) &&
                                 imagePlayer.canCompletePortraitTriple(first, candidate, possibleThird)

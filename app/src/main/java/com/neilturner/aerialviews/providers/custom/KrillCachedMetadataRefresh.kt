@@ -283,6 +283,7 @@ internal object KrillCachedMetadataRefresh {
                                 it.metadata.focusRevision,
                                 it.metadata.focusX,
                                 it.metadata.focusY,
+                                Json.encodeToString(it.metadata.tags),
                             )
                         }
                     val pairsChanged = dao.updateKrillPairs(state.cachedAt, pairUpdates) ?: return@withLock
@@ -292,7 +293,7 @@ internal object KrillCachedMetadataRefresh {
                     withContext(Dispatchers.Main) {
                         if (lease.isValid()) {
                             playlist.updateCachedCaptions(result.media)
-                            playlist.updateCachedPairing(result.media)
+                            playlist.updateCachedPairing(result.media, storeChanged = pairsChanged > 0)
                         }
                     }
                     if (lease.isValid()) {

@@ -268,15 +268,20 @@ class KrillPrivateFeedTest {
                         """"pair":{"partner_id":"two","third_id":"three","score":0.9,"reason":"same_occasion: 4 min apart"}}]}""",
                 ),
             )
-            server.enqueue(MockResponse().setBody("""{"total":2,"media":[{"id":"two","description":"Second"}]}"""))
+            server.enqueue(
+                MockResponse().setBody(
+                    """{"total":2,"media":[{"id":"two","description":"Second","category":"art",""" +
+                        """"artwork_title":"Harbour","artwork_artist":"A. Painter"}]}""",
+                ),
+            )
             val feed = KrillPrivateFeed(OkHttpClient(), server.url("/").toString(), "test-token")
             assertEquals("My library", feed.spaces().single().name)
             val photos = feed.photos("mine")
-            assertEquals(listOf("First", "Second"), photos.map { it.description })
+            assertEquals(listOf("First", "Harbour\nA. Painter"), photos.map { it.description })
             assertEquals(3000, photos.first().width)
             assertEquals(2000, photos.first().height)
             assertEquals(listOf("Penguin", "Trip"), photos.first().tags)
-            assertEquals(emptyList<String>(), photos.last().tags)
+            assertEquals(listOf("art"), photos.last().tags)
             assertEquals("two", photos.first().pairPartner)
             assertEquals("three", photos.first().pairThird)
             assertEquals(7L, photos.first().focusRevision)

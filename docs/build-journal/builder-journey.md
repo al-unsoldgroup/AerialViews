@@ -473,6 +473,16 @@ The TV photo menu no longer carries the dead permanent-delete rows, confirmation
 
 New: an "Offline" label appears in the corner after 15 seconds without validated internet and clears on reconnect. While offline the scheduled dashboard is not opened (playback continues from cache), and on reconnect a failed dashboard retries at once instead of after its 60 second backoff. Four unit tests cover the grace period, blip, and reconnect logic. The device behaviour is not yet verified.
 
+### Personal art in Art and Mixed modes (UNS-1750, 10 November)
+
+Personal art is a photo Al marks as art in Krill, on one item or on a multi-select. The mark is the existing `art` tag. A title and artist typed by hand are stored in the caption fields from migration 052 as verified, with source `manual`, and caption enrichment no longer overwrites them. The frame feed now also sends `category: "art"`. New Krill migration 058 bumps the library revision when the art tag or the artwork caption changes, so the TV picks up the change instead of waiting up to a day.
+
+On the frame, an item tagged or categorised as art populates the ART category, so Art mode joins the mode cycle and Mixed mode uses it at the existing 30 percent default. Art without a manual crop point is shown whole: fit to the screen on a dark neutral matte, with no server crop, no focal crop and no blurred backdrop. When Al sets a crop point with the existing focus editor, art is cropped around it like a photo. Art is never placed in a collage. The caption shows title and artist, or the artist alone.
+
+This follows the task decision for this milestone (uncropped by default) rather than the plan's earlier "art fills the screen by default" line. The full unit suite, the formatting check and `assembleBetaDebug` passed. Nothing was installed on the TV in this step.
+
+Review fix, 10 November: marking or unmarking art after an item was already cached did not reach the frame. The full refresh wrote captions and pairing but never rewrote tags on existing cached rows, so the item stayed a photo until the cache was rebuilt. The pairing refresh now carries the feed tags into the cached row and the in-memory item, and rebuilds the mode index when they change. New tests add and remove the art tag on a cached row and on a window item. Full unit suite: 698 tests, 0 failures; formatting check and `assembleBetaDebug` passed.
+
 ## Next experiments
 
 1. Finish reviewing the Krill integration and artwork import, then verify its authorized deployment and private image delivery.

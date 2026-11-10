@@ -43,6 +43,7 @@ class KrillCaptionTest {
             )
         assertEquals("Water Lilies\nClaude Monet", KrillCaption.format(art))
         assertEquals("Water Lilies", KrillCaption.format(art.copy(artworkArtist = " ")))
+        assertEquals("Claude Monet", KrillCaption.format(art.copy(artworkTitle = null)))
     }
 
     @Test
