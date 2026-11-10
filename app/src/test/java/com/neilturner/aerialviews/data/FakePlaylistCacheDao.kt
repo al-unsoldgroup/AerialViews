@@ -34,6 +34,14 @@ internal class FakePlaylistCacheDao : PlaylistCacheDao {
 
     override suspend fun getAllMediaItemsOrdered(): List<CachedMediaEntity> = orderedMedia()
 
+    override suspend fun getKrillUris(): List<String> = mediaItems.filter { it.source == "KRILL" }.map { it.uri }
+
+    override suspend fun lastMediaOrder(): Int = mediaItems.maxOfOrNull { it.playlistOrder } ?: -1
+
+    override suspend fun incrementMediaTotal(count: Int) {
+        state = state?.let { it.copy(totalMediaItems = it.totalMediaItems + count) }
+    }
+
     override suspend fun getPortraitPlanRows(): List<PortraitPlanRow> =
         orderedMedia().map {
             PortraitPlanRow(
@@ -49,6 +57,7 @@ internal class FakePlaylistCacheDao : PlaylistCacheDao {
                 it.tagsJson,
                 it.pairedWithNext,
                 it.pairPartner,
+                it.pairThird,
             )
         }
 
@@ -123,6 +132,37 @@ internal class FakePlaylistCacheDao : PlaylistCacheDao {
             val item = mediaItems[index]
             if (item.source == "KRILL" && item.uri == uri) mediaItems[index] = item.copy(shortDescription = caption)
         }
+    }
+
+    override suspend fun updateKrillPair(
+        uri: String,
+        partner: String?,
+        third: String?,
+        focusRevision: Long?,
+        focusX: Float?,
+        focusY: Float?,
+    ): Int {
+        var changed = 0
+        mediaItems.indices.forEach { index ->
+            val item = mediaItems[index]
+            if (item.source == "KRILL" && item.uri == uri &&
+                (
+                    item.pairPartner != partner || item.pairThird != third || item.focusRevision != focusRevision ||
+                        item.focusX != focusX || item.focusY != focusY
+                )
+            ) {
+                mediaItems[index] =
+                    item.copy(
+                        pairPartner = partner,
+                        pairThird = third,
+                        focusRevision = focusRevision,
+                        focusX = focusX,
+                        focusY = focusY,
+                    )
+                changed++
+            }
+        }
+        return changed
     }
 
     override suspend fun getKrillCaptions(): List<KrillCachedCaption> =

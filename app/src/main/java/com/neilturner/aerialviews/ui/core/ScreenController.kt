@@ -41,11 +41,13 @@ import com.neilturner.aerialviews.models.prefs.FrameRotationPrefs
 import com.neilturner.aerialviews.models.prefs.GeneralPrefs
 import com.neilturner.aerialviews.models.prefs.SonosPrefs
 import com.neilturner.aerialviews.models.videos.AerialMedia
+import com.neilturner.aerialviews.providers.ProviderFetchResult
 import com.neilturner.aerialviews.providers.custom.KrillCachedMetadataRefresh
 import com.neilturner.aerialviews.providers.custom.KrillDeletionRequest
 import com.neilturner.aerialviews.providers.custom.KrillFrameCache
 import com.neilturner.aerialviews.providers.custom.KrillPortraitHistory
 import com.neilturner.aerialviews.providers.custom.KrillPrivateFeed
+import com.neilturner.aerialviews.providers.custom.KrillPrivateProvider
 import com.neilturner.aerialviews.providers.custom.KrillSessionManager
 import com.neilturner.aerialviews.providers.custom.KrillTokenStore
 import com.neilturner.aerialviews.providers.custom.cancellableKrillClient
@@ -181,6 +183,7 @@ class ScreenController(
         val start: Int,
         val first: AerialMedia,
         val second: AerialMedia,
+        val third: AerialMedia? = null,
     )
 
     private var currentPortraitSlide: PortraitSlide? = null
@@ -445,7 +448,11 @@ class ScreenController(
                     if (frameModeIndex == null || frameModeMetadataRevision != playlist.metadataRevision) buildFrameModeIndex()
                 }
             }
-            if (playlistBackedByCache) mainScope.launch { refreshCaptionsWhileActive() }
+            if (playlistBackedByCache) {
+                mainScope.launch { refreshCaptionsWhileActive() }
+            } else {
+                mainScope.launch { refreshUncachedKrillMetadataWhileActive() }
+            }
             if (BuildConfig.DEBUG) {
                 val prefs = context.getSharedPreferences("frame_debug", Context.MODE_PRIVATE)
                 if (prefs.contains("start_position")) {
@@ -691,7 +698,13 @@ class ScreenController(
 
         // Images
         if (media.type == AerialMediaType.IMAGE) {
-            if (portraitSlide == null) imagePlayer.setImage(media) else imagePlayer.setPortraitPair(media, portraitSlide.second)
+            if (portraitSlide ==
+                null
+            ) {
+                imagePlayer.setImage(media)
+            } else {
+                imagePlayer.setPortraitPair(media, portraitSlide.second, portraitSlide.third)
+            }
             imageViewBinding.root.visibility = View.VISIBLE
             videoViewBinding.root.visibility = View.INVISIBLE
         }
@@ -1294,9 +1307,16 @@ class ScreenController(
             val restored =
                 portraitSlidesByEnd.entries.firstOrNull { (end, slide) ->
                     slide.start == playlist.currentPosition && slide.first.uri == media.uri &&
-                        KrillPortraitHistory.adjacent(slide.start, end, playlist.size) &&
-                        frameModeUris.getOrNull(end) == slide.second.uri.toString() &&
+                        (slide.start + if (slide.third == null) 1 else 2) % playlist.size == end &&
+                        frameModeUris.getOrNull(end) == (slide.third ?: slide.second).uri.toString() &&
+                        (
+                            slide.third == null || frameModeUris.getOrNull(
+                                (slide.start + 1) % playlist.size,
+                            ) == slide.second.uri.toString()
+                        ) &&
                         !isExcludedFromRotation(slide.first) && !isExcludedFromRotation(slide.second) &&
+                        (slide.third == null || !isExcludedFromRotation(slide.third)) &&
+                        (slide.third == null || !isTripleRejected(slide.first, slide.second, slide.third)) &&
                         !isPairRejected(slide.first, slide.second)
                 }
             if (restored != null) {
@@ -1309,31 +1329,44 @@ class ScreenController(
 
         var pair: PortraitSlide? = null
         if (previous && !frameModeActive) {
-            pair =
-                portraitSlidesByEnd[playlist.currentPosition]?.takeIf {
-                    KrillPortraitHistory.adjacent(it.start, playlist.currentPosition, playlist.size) &&
-                        it.second.uri == media.uri && !isExcludedFromRotation(it.first) && !isExcludedFromRotation(it.second) &&
-                        !isPairRejected(it.first, it.second)
-                }
             if (pair == null) {
                 val namespace = runCatching { KrillSessionManager(context).cachedSession()?.cacheNamespace }.getOrNull()
                 val end = playlist.currentPosition
                 val start = namespace?.let { portraitHistory.findStart(it, end, media.uri.toString()) }
-                if (namespace != null && start != null && KrillPortraitHistory.adjacent(start, end, playlist.size)) {
-                    val second = media
+                if (namespace != null && start != null && playlist.size >= 2 &&
+                    ((start + 1) % playlist.size == end || (playlist.size >= 3 && (start + 2) % playlist.size == end))
+                ) {
+                    val last = media
                     imagePlayer.stopTimerForTransition()
                     mainScope.launch {
                         val first = withContext(Dispatchers.IO) { runCatching { playlist.itemAt(start) }.getOrNull() }
                         if (isStopped || navigation != navigationGeneration || playlist.currentPosition != end) return@launch
-                        val restored =
-                            if (first != null && portraitHistory.matchesFirst(namespace, end, first.uri.toString()) &&
-                                !isExcludedFromRotation(first) && !isExcludedFromRotation(second) && !isPairRejected(first, second)
-                            ) {
-                                PortraitSlide(start, first, second)
+                        val tripleHistory = playlist.size >= 3 && (start + 2) % playlist.size == end
+                        val middle =
+                            if (tripleHistory) {
+                                withContext(Dispatchers.IO) { runCatching { playlist.itemAt((start + 1) % playlist.size) }.getOrNull() }
                             } else {
                                 null
                             }
-                        loadItem(restored?.first ?: second, restored)
+                        if (isStopped || navigation != navigationGeneration || playlist.currentPosition != end) return@launch
+                        val second = middle ?: last
+                        val restored =
+                            if (first != null && portraitHistory.matchesFirst(namespace, end, first.uri.toString()) &&
+                                !isExcludedFromRotation(first) && !isExcludedFromRotation(second) && !isExcludedFromRotation(last) &&
+                                !isPairRejected(first, second) && (
+                                    !tripleHistory ||
+                                        (
+                                            middle != null && portraitHistory.matchesSecond(namespace, end, middle.uri.toString()) &&
+                                                !isTripleRejected(first, middle, last) &&
+                                                imagePlayer.canCompletePortraitTriple(first, middle, last)
+                                        )
+                                )
+                            ) {
+                                PortraitSlide(start, first, second, if (middle != null) last else null)
+                            } else {
+                                null
+                            }
+                        loadItem(restored?.first ?: last, restored)
                         preloadNextFrameItem()
                     }
                     return
@@ -1368,7 +1401,36 @@ class ScreenController(
                                 null
                             }
                         if (candidate?.uri == next.uri) {
-                            chosen = PortraitSlide(start, first, candidate)
+                            var third: AerialMedia? = null
+                            val possibleThird = playlist.peekNextItem { true }
+                            val thirdModeMatches =
+                                possibleThird != null && (
+                                    !frameModeActive ||
+                                        FrameModePolicy.category(first.metadata.tags, first.metadata.tagsKnown) ==
+                                        FrameModePolicy.category(possibleThird.metadata.tags, possibleThird.metadata.tagsKnown)
+                                )
+                            if (possibleThird != null && thirdModeMatches && !isExcludedFromRotation(possibleThird) &&
+                                !isTripleRejected(first, candidate, possibleThird) &&
+                                imagePlayer.canCompletePortraitTriple(first, candidate, possibleThird)
+                            ) {
+                                val pairEnd = playlist.currentPosition
+                                val consumed =
+                                    try {
+                                        playlist.nextItem()
+                                    } catch (
+                                        _: MediaPlaylistContentionException,
+                                    ) {
+                                        null
+                                    } catch (_: MediaPlaylistFetchException) {
+                                        null
+                                    }
+                                if (consumed?.uri == possibleThird.uri) {
+                                    third = consumed
+                                } else if (playlist.currentPosition != pairEnd) {
+                                    playlist.restoreCursor(pairEnd)
+                                }
+                            }
+                            chosen = PortraitSlide(start, first, candidate, third)
                             if (portraitSlidesByEnd.size >= 200) {
                                 portraitSlidesByEnd.keys.firstOrNull()?.let { portraitSlidesByEnd.remove(it) }
                             }
@@ -1380,6 +1442,7 @@ class ScreenController(
                                     start,
                                     first.uri.toString(),
                                     candidate.uri.toString(),
+                                    third?.uri?.toString(),
                                 )
                             }
                         } else if (playlist.currentPosition != start) {
@@ -1644,6 +1707,15 @@ class ScreenController(
         return portraitHistory.isPairRejected(namespace, first.uri.toString(), second.uri.toString())
     }
 
+    private fun isTripleRejected(
+        first: AerialMedia,
+        second: AerialMedia,
+        third: AerialMedia,
+    ): Boolean {
+        val namespace = runCatching { KrillSessionManager(context).cachedSession()?.cacheNamespace }.getOrNull() ?: return true
+        return portraitHistory.isTripleRejected(namespace, first.uri.toString(), second.uri.toString(), third.uri.toString())
+    }
+
     private fun isPrivateMediaAuthorized(media: AerialMedia): Boolean {
         val url = media.uri.toString()
         if (!KrillPrivateFeed.isFrameImage(url) && !KrillPrivateFeed.isFrameVideo(url)) return true
@@ -1664,7 +1736,8 @@ class ScreenController(
         if (!isPaused) pauseMedia()
         photoMenuHasPair = currentPortraitSlide != null
         photoMenuIsVideo = video
-        photoMenuHasDelete = KrillPrivateFeed.isFrameImage(media.uri.toString()) && isPrivateMediaAuthorized(media)
+        // Permanent deletion belongs to the phone library, not the TV remote.
+        photoMenuHasDelete = false
         deletionTarget = null
         deletionNamespace = null
         ignorePhotoMenuRelease = true
@@ -1681,6 +1754,7 @@ class ScreenController(
             TextView(context).apply {
                 setText(text)
                 textSize = 22f
+                setTextColor(Color.WHITE)
                 setPadding(24, 18, 24, 18)
             }
         if (video) {
@@ -1857,7 +1931,7 @@ class ScreenController(
     }
 
     private fun isCurrentPhoto(media: AerialMedia): Boolean =
-        listOfNotNull(currentMedia, currentPortraitSlide?.second).any {
+        listOfNotNull(currentMedia, currentPortraitSlide?.second, currentPortraitSlide?.third).any {
             KrillPrivateFeed.sameFramePhoto(it.uri.toString(), media.uri.toString())
         }
 
@@ -1872,6 +1946,87 @@ class ScreenController(
                 refresh.join()
             } finally {
                 refresh.cancel()
+            }
+        }
+    }
+
+    /** Refresh metadata in an in-memory playlist without replacing the current slide. */
+    private suspend fun refreshUncachedKrillMetadataWhileActive() {
+        var namespace: String? = null
+        var previousRevision: String? = null
+        var previousVideoAvailable: Boolean? = null
+        var lastFullAt = 0L
+        var lastCheckedAt = 0L
+        runKrillCaptionSchedule {
+            if (GeneralPrefs.wifiOnly && !NetworkHelper.isOnWifiOrEthernet(context)) return@runKrillCaptionSchedule
+            val now = System.currentTimeMillis()
+            if (now >= lastCheckedAt && now - lastCheckedAt < 4 * 60 * 1000L) return@runKrillCaptionSchedule
+            try {
+                val updates =
+                    withContext(Dispatchers.IO) {
+                        val job = currentCoroutineContext()[Job]!!
+                        val client = cancellableKrillClient(job)
+                        val session = KrillSessionManager(context).session(client) { job.ensureActive() } ?: return@withContext null
+                        val space = session.spaceId ?: return@withContext null
+                        val lease = KrillFrameCache.fence.acquire(session.cacheNamespace) ?: return@withContext null
+                        try {
+                            lease.onCancel { job.cancel() }
+                            val config = KrillPrivateFeed.config(client, session.libraryOrigin)
+                            val feed = KrillPrivateFeed(client, session.libraryOrigin, session.accessToken)
+                            val revision = if (config.libraryRevisionAvailable) feed.libraryRevision(space) else null
+                            if (config.libraryRevisionAvailable && revision == null) return@withContext null
+                            val sameLibrary = namespace == session.cacheNamespace
+                            val recentFull = now >= lastFullAt && now - lastFullAt < 24 * 60 * 60 * 1000L
+                            if (sameLibrary && recentFull && revision != null && revision == previousRevision &&
+                                previousVideoAvailable == config.videoAvailable
+                            ) {
+                                lastCheckedAt = now
+                                return@withContext null
+                            }
+                            val snapshot = KrillPrivateProvider(context).fetchWithEvidence()
+                            val result =
+                                snapshot.result as? ProviderFetchResult.Success
+                                    ?: return@withContext null
+                            val evidence = snapshot.evidence ?: return@withContext null
+                            if (evidence.namespace != session.cacheNamespace || evidence.revision != revision ||
+                                evidence.videoAvailable != config.videoAvailable
+                            ) {
+                                return@withContext null
+                            }
+                            val activeNamespace = KrillSessionManager(context).cachedSession()?.cacheNamespace
+                            val revisionChanged = revision != null && feed.libraryRevision(space) != revision
+                            val capabilityChanged =
+                                KrillPrivateFeed.config(client, session.libraryOrigin).videoAvailable != config.videoAvailable
+                            val wrongSession = activeNamespace != session.cacheNamespace
+                            if (!lease.isValid() || wrongSession || revisionChanged || capabilityChanged) return@withContext null
+                            namespace = session.cacheNamespace
+                            previousRevision = revision
+                            previousVideoAvailable = config.videoAvailable
+                            lastFullAt = now
+                            lastCheckedAt = now
+                            result.media.filter {
+                                val uri = it.uri.toString()
+                                it.source == AerialMediaSource.KRILL &&
+                                    (
+                                        KrillPrivateFeed.isSelectedImage(uri, session.libraryOrigin, space) ||
+                                            KrillPrivateFeed.isSelectedVideo(uri, session.libraryOrigin, space)
+                                    )
+                            }
+                        } finally {
+                            lease.close()
+                        }
+                    }
+                if (updates != null && !isStopped && screenCacheEpoch == KrillFrameCache.epoch &&
+                    runCatching { KrillSessionManager(context).cachedSession()?.cacheNamespace }.getOrNull() == namespace
+                ) {
+                    playlist.updateCachedCaptions(updates)
+                    playlist.updateCachedPairing(updates)
+                    playlist.appendUncachedKrillMedia(updates)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                Timber.w("Krill in-memory metadata refresh deferred")
             }
         }
     }
@@ -1905,7 +2060,11 @@ class ScreenController(
     private fun showCurrentPairSeparately() {
         val slide = currentPortraitSlide ?: return
         val namespace = runCatching { KrillSessionManager(context).cachedSession()?.cacheNamespace }.getOrNull() ?: return
-        portraitHistory.rejectPair(namespace, slide.first.uri.toString(), slide.second.uri.toString())
+        if (slide.third == null) {
+            portraitHistory.rejectPair(namespace, slide.first.uri.toString(), slide.second.uri.toString())
+        } else {
+            portraitHistory.rejectTriple(namespace, slide.first.uri.toString(), slide.second.uri.toString(), slide.third.uri.toString())
+        }
         pauseAfterNextImage = photoMenuWasPaused
         canSkip = false
         photoTransition = imagePlayer.beginPhotoTransition()

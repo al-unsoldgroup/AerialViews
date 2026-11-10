@@ -76,6 +76,7 @@ class PlaylistCacheRepository(
             val state = dao.getPlaylistState() ?: return@withContext false
             Timber.d("Portrait plan loaded state in ${(System.nanoTime() - started) / 1_000_000}ms")
             val history = KrillPortraitHistory(appContext)
+            val cadenceUpgrade = history.needsCadenceUpgrade(namespace)
             val matchesImage = KrillPrivateFeed.selectedImageMatcher(origin, space)
             val selectedImages = mutableMapOf<String, Boolean>()
 
@@ -89,15 +90,25 @@ class PlaylistCacheRepository(
                 } else {
                     dao.getMediaItemsChunkFiltered(allowed.toList(), 1, state.mediaPosition).singleOrNull() ?: return@withContext false
                 }
-            val protectedOrder = (current?.playlistOrder ?: -1) + if (current?.pairedWithNext == true) 1 else 0
+            val protectedCount =
+                if (current?.pairedWithNext == true) {
+                    if (current.pairThird != null) {
+                        2
+                    } else {
+                        1
+                    }
+                } else {
+                    0
+                }
+            val protectedOrder = (current?.playlistOrder ?: -1) + protectedCount
             val unplanned =
                 dao.unplannedKrillUrisAfter(protectedOrder).filter {
                     isSelectedImage(it)
                 }
             Timber.d("Portrait plan checked candidates in ${(System.nanoTime() - started) / 1_000_000}ms")
-            if (unplanned.isEmpty()) return@withContext false
+            if (unplanned.isEmpty() && !cadenceUpgrade) return@withContext false
             // Batch newly measured photos so one preload cannot rebuild the rotation at every startup.
-            if (unplanned.size < 10 &&
+            if (!cadenceUpgrade && unplanned.size < 10 &&
                 dao.plannedKrillUrisAfter(protectedOrder).any {
                     isSelectedImage(it)
                 } && history.deferSmallReplan(namespace, state.cachedAt, System.currentTimeMillis())
@@ -108,12 +119,12 @@ class PlaylistCacheRepository(
             Timber.d("Portrait plan loaded cache in ${(System.nanoTime() - started) / 1_000_000}ms")
             var protectedThrough = current?.let { saved -> media.indexOfFirst { it.id == saved.id } } ?: -1
             if (current != null && protectedThrough < 0) return@withContext false
-            if (current?.pairedWithNext == true && protectedThrough < media.lastIndex) protectedThrough++
+            protectedThrough = (protectedThrough + protectedCount).coerceAtMost(media.lastIndex)
             val future =
                 media.drop(protectedThrough + 1).filter {
                     it.source == AerialMediaSource.KRILL.name && isSelectedImage(it.uri)
                 }
-            if (future.isEmpty() || future.none { it.pairedWithNext == null } || future.any { it.tagsJson == null }) {
+            if (future.isEmpty() || (!cadenceUpgrade && future.none { it.pairedWithNext == null }) || future.any { it.tagsJson == null }) {
                 return@withContext false
             }
             val selectedIds = future.map { it.id }.toSet()
@@ -121,7 +132,7 @@ class PlaylistCacheRepository(
                 media.map { item ->
                     val portrait =
                         if (item.id in selectedIds && item.type == AerialMediaType.IMAGE.name) {
-                            KrillPortraitPairing.Photo(item.uri, item.width, item.height, item.pairPartner)
+                            KrillPortraitPairing.Photo(item.uri, item.width, item.height, item.pairPartner, item.pairThird)
                         } else {
                             null
                         }
@@ -130,7 +141,7 @@ class PlaylistCacheRepository(
             Timber.d("Portrait plan prepared candidates in ${(System.nanoTime() - started) / 1_000_000}ms")
             val planningJob = currentCoroutineContext()[Job]
             val plan =
-                KrillPortraitRotation.arrange(items, protectedThrough, panelWidth, panelHeight, checkpoint = {
+                KrillPortraitRotation.arrange(items, protectedThrough, panelWidth, panelHeight, collageEvery = 5, checkpoint = {
                     planningJob?.ensureActive()
                 }) { first, second ->
                     val firstUrl = first.portrait?.id ?: return@arrange true
@@ -152,7 +163,10 @@ class PlaylistCacheRepository(
                 }
             planningJob?.ensureActive()
             val applied = dao.applyPortraitPlanRows(state, media, planned)
-            if (applied) history.clearReplanDelay(namespace, state.cachedAt)
+            if (applied) {
+                history.clearReplanDelay(namespace, state.cachedAt)
+                history.markCadenceUpgraded(namespace)
+            }
             Timber.d("Portrait plan applied cache in ${(System.nanoTime() - started) / 1_000_000}ms")
             applied
         }
@@ -312,6 +326,9 @@ class PlaylistCacheRepository(
                             Timber.d("PlaylistCache: Lazy fetching chunk: offset $offset, limit $limit")
                             getMediaChunk(offset, limit, resolvedFilter)
                         },
+                        countSource = {
+                            dao.countCurrentMedia(state.cachedAt, state.settingsHash, resolvedFilter.allowedNames())
+                        },
                     ),
                 musicPlaylist = musicPlaylist,
                 musicResumeIndex = state.musicTrackIndex,
@@ -368,6 +385,10 @@ class PlaylistCacheRepository(
                     height = entity.height,
                     pairedWithNext = entity.pairedWithNext,
                     pairPartner = entity.pairPartner,
+                    pairThird = entity.pairThird,
+                    focusRevision = entity.focusRevision,
+                    focusX = entity.focusX,
+                    focusY = entity.focusY,
                     tags = entity.tagsJson?.let { runCatching { Json.decodeFromString<List<String>>(it) }.getOrNull() } ?: emptyList(),
                     tagsKnown = entity.tagsJson != null,
                     exif =
@@ -392,35 +413,7 @@ class PlaylistCacheRepository(
         shuffleEnabled: Boolean,
     ) = withContext(Dispatchers.IO) {
         val music = musicPlaylist?.tracks ?: emptyList()
-        val mediaEntities =
-            media.mapIndexed { index, m ->
-                CachedMediaEntity(
-                    playlistOrder = index,
-                    uri = m.uri.toString(),
-                    type = m.type.name,
-                    source = m.source.name,
-                    shortDescription = m.metadata.shortDescription,
-                    pointsOfInterest = m.metadata.pointsOfInterest,
-                    timeOfDay = m.metadata.timeOfDay.name,
-                    scene = m.metadata.scene.name,
-                    albumName = m.metadata.albumName,
-                    title = m.metadata.title,
-                    exifDate = m.metadata.exif.date,
-                    exifOffset = m.metadata.exif.offset,
-                    exifLatitude = m.metadata.exif.latitude,
-                    exifLongitude = m.metadata.exif.longitude,
-                    exifCity = m.metadata.exif.city,
-                    exifState = m.metadata.exif.state,
-                    exifCountry = m.metadata.exif.country,
-                    exifDescription = m.metadata.exif.description,
-                    audioUri = m.audioUri?.toString(),
-                    width = m.metadata.width,
-                    height = m.metadata.height,
-                    tagsJson = Json.encodeToString(m.metadata.tags),
-                    pairedWithNext = m.metadata.pairedWithNext,
-                    pairPartner = m.metadata.pairPartner,
-                )
-            }
+        val mediaEntities = media.mapIndexed { index, item -> mediaEntity(item, index) }
 
         val musicEntities =
             music.mapIndexed { index, t ->
@@ -447,6 +440,49 @@ class PlaylistCacheRepository(
         dao.updateCache(mediaEntities, musicEntities, state)
         Timber.i("PlaylistCache: Saved new cache. Media: ${media.size}, Music: ${music.size}, Hash: $settingsHash")
     }
+
+    internal suspend fun appendKrillMedia(
+        state: PlaylistStateEntity,
+        media: List<AerialMedia>,
+    ): Int? =
+        withContext(Dispatchers.IO) {
+            dao.appendKrillItems(state.cachedAt, state.settingsHash, media.mapIndexed { index, item -> mediaEntity(item, index) })
+        }
+
+    private fun mediaEntity(
+        m: AerialMedia,
+        index: Int,
+    ): CachedMediaEntity =
+        CachedMediaEntity(
+            playlistOrder = index,
+            uri = m.uri.toString(),
+            type = m.type.name,
+            source = m.source.name,
+            shortDescription = m.metadata.shortDescription,
+            pointsOfInterest = m.metadata.pointsOfInterest,
+            timeOfDay = m.metadata.timeOfDay.name,
+            scene = m.metadata.scene.name,
+            albumName = m.metadata.albumName,
+            title = m.metadata.title,
+            exifDate = m.metadata.exif.date,
+            exifOffset = m.metadata.exif.offset,
+            exifLatitude = m.metadata.exif.latitude,
+            exifLongitude = m.metadata.exif.longitude,
+            exifCity = m.metadata.exif.city,
+            exifState = m.metadata.exif.state,
+            exifCountry = m.metadata.exif.country,
+            exifDescription = m.metadata.exif.description,
+            audioUri = m.audioUri?.toString(),
+            width = m.metadata.width,
+            height = m.metadata.height,
+            tagsJson = Json.encodeToString(m.metadata.tags),
+            pairedWithNext = m.metadata.pairedWithNext,
+            pairPartner = m.metadata.pairPartner,
+            pairThird = m.metadata.pairThird,
+            focusRevision = m.metadata.focusRevision,
+            focusX = m.metadata.focusX,
+            focusY = m.metadata.focusY,
+        )
 
     suspend fun saveMediaPosition(position: Int) {
         if (prefsProvider().enabled) {

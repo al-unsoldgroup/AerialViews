@@ -29,6 +29,10 @@ data class AerialMediaMetadata(
     var pairedWithNext: Boolean? = null,
     /** Krill media ID of the server-chosen collage partner. */
     var pairPartner: String? = null,
+    var pairThird: String? = null,
+    var focusRevision: Long? = null,
+    var focusX: Float? = null,
+    var focusY: Float? = null,
 )
 
 data class AerialExifMetadata(

@@ -2,6 +2,7 @@ package com.neilturner.aerialviews.ui.core
 
 import android.content.Context
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.graphics.drawable.Animatable
 import android.graphics.drawable.Drawable
 import android.hardware.display.DisplayManager
@@ -25,6 +26,7 @@ import coil3.request.Disposable
 import coil3.request.ImageRequest
 import coil3.request.SuccessResult
 import coil3.request.allowHardware
+import coil3.size.Scale
 import com.hierynomus.protocol.transport.TransportException
 import com.hierynomus.smbj.common.SMBRuntimeException
 import com.neilturner.aerialviews.BuildConfig
@@ -107,6 +109,7 @@ class ImagePlayerView : FrameLayout {
 
     @Volatile private var currentIsPrivate = false
     private var foregroundIsPrivate = false
+    private var activeFocus: FocusCrop.Point? = null
     private val cacheInvalidation: () -> Unit = {
         val done = CountDownLatch(1)
         val clearDisplay =
@@ -183,6 +186,9 @@ class ImagePlayerView : FrameLayout {
     init {
         addView(backgroundImageView)
         addView(foregroundImageView)
+        foregroundImageView.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+            if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) applyFocusedPlacement()
+        }
         KrillFrameCache.addInvalidationListener(cacheInvalidation)
     }
 
@@ -222,6 +228,10 @@ class ImagePlayerView : FrameLayout {
             .diskCache { KrillFrameCache.get(context) }
             // .logger(logger)
             .components {
+                add(
+                    com.neilturner.aerialviews.providers.custom
+                        .KrillVariantInventoryInterceptor(context.applicationContext),
+                )
                 add(OkHttpNetworkFetcherFactory(imageClient))
                 add(InputStreamFetcher.Factory())
                 add(buildGifDecoder())
@@ -236,11 +246,10 @@ class ImagePlayerView : FrameLayout {
         if (media?.source != AerialMediaSource.KRILL || media.type != AerialMediaType.IMAGE) return
         if (isPrivateKrillImage(media)) {
             ioScope.launch {
-                val suitable =
-                    qualityRequests.withPermit {
-                        generation == preloadGeneration && runCatching { hasDisplayResolution(media) }.getOrDefault(false)
-                    }
-                if (suitable && generation == preloadGeneration) {
+                qualityRequests.withPermit {
+                    if (generation == preloadGeneration) runCatching { hasDisplayResolution(media) }
+                }
+                if (generation == preloadGeneration) {
                     mainScope.launch {
                         if (generation == preloadGeneration) preloadResolved(media, generation)
                     }
@@ -268,6 +277,7 @@ class ImagePlayerView : FrameLayout {
                         if (privateKey != null) {
                             diskCacheKey(privateKey)
                             memoryCacheKey(privateKey)
+                            scale(Scale.FILL)
                             if (forceOfflineForTest()) networkCachePolicy(CachePolicy.DISABLED)
                         }
                     }.size(width, height)
@@ -286,6 +296,7 @@ class ImagePlayerView : FrameLayout {
                                             targetWidth,
                                             targetHeight,
                                             privateSmartCrop = isPrivateCropEnabled(media),
+                                            focusRevision = media.metadata.focusRevision,
                                         )
                                     }.getOrNull()
                                 if (cropUrl != null) {
@@ -389,16 +400,10 @@ class ImagePlayerView : FrameLayout {
         }
         ioScope.launch {
             if (isPrivateKrillImage(media)) {
-                val suitable =
-                    qualityRequests.withPermit {
-                        generation == imageGeneration && runCatching { hasDisplayResolution(media) }.getOrDefault(false)
-                    }
-                if (generation != imageGeneration) return@launch
-                if (!suitable) {
-                    Timber.i("Skipping Krill image without sufficient source resolution")
-                    onPlayerError(generation)
-                    return@launch
+                qualityRequests.withPermit {
+                    if (generation == imageGeneration) runCatching { hasDisplayResolution(media) }
                 }
+                if (generation != imageGeneration) return@launch
             }
             val baseStream = ImagePlayerHelper.streamFromMedia(context, media)
             if (generation != imageGeneration) {
@@ -482,7 +487,30 @@ class ImagePlayerView : FrameLayout {
     }
 
     private fun pairingPhoto(media: AerialMedia) =
-        KrillPortraitPairing.Photo(media.uri.toString(), media.metadata.width, media.metadata.height, media.metadata.pairPartner)
+        KrillPortraitPairing.Photo(
+            media.uri.toString(),
+            media.metadata.width,
+            media.metadata.height,
+            media.metadata.pairPartner,
+            media.metadata.pairThird,
+        )
+
+    internal fun canCompletePortraitTriple(
+        first: AerialMedia,
+        second: AerialMedia,
+        third: AerialMedia,
+    ): Boolean {
+        if (!isPrivateKrillImage(third)) return false
+        val (width, height) = resolveTargetSize()
+        val sizes = listOf(first, second, third).map { PortraitCollageLayout.Size(it.metadata.width ?: 0, it.metadata.height ?: 0) }
+        val boxes =
+            PortraitCollageLayout.arrangeThree(PortraitCollageLayout.Size(width, height), sizes[0], sizes[1], sizes[2])
+                ?: return false
+        return KrillPortraitPairing.isTriple(pairingPhoto(first), pairingPhoto(second), pairingPhoto(third), width / 2, height) &&
+            sizes.zip(listOf(boxes.first, boxes.second, boxes.third)).all { (size, box) ->
+                size.width >= box.right - box.left && size.height >= box.bottom - box.top
+            }
+    }
 
     internal suspend fun probePortraitPair(
         first: AerialMedia,
@@ -506,6 +534,7 @@ class ImagePlayerView : FrameLayout {
     internal fun setPortraitPair(
         first: AerialMedia,
         second: AerialMedia,
+        third: AerialMedia? = null,
     ) {
         collageJob?.cancel()
         removeCallbacks(finishedRunnable)
@@ -522,20 +551,47 @@ class ImagePlayerView : FrameLayout {
             mainScope.launch {
                 var firstAccess: Pair<String, KrillCacheFence.Lease>? = null
                 var secondAccess: Pair<String, KrillCacheFence.Lease>? = null
+                var thirdAccess: Pair<String, KrillCacheFence.Lease>? = null
                 try {
                     val access1 = acquirePrivateAccess(first) ?: throw IllegalStateException("Private photo unavailable")
                     firstAccess = access1
                     val access2 = acquirePrivateAccess(second) ?: throw IllegalStateException("Private photo unavailable")
                     secondAccess = access2
+                    val access3 = third?.let { acquirePrivateAccess(it) ?: throw IllegalStateException("Private photo unavailable") }
+                    thirdAccess = access3
                     val job = currentCoroutineContext()[Job]!!
                     access1.second.onCancel { job.cancel() }
                     access2.second.onCancel { job.cancel() }
+                    access3?.second?.onCancel { job.cancel() }
                     val (width, height) = resolveTargetSize()
                     val panel = (width / 2) to height
+                    val canvas = PortraitCollageLayout.Size(width, height)
+
+                    fun size(media: AerialMedia) = PortraitCollageLayout.Size(media.metadata.width ?: 0, media.metadata.height ?: 0)
+                    val boxes =
+                        if (third == null) {
+                            val pair =
+                                PortraitCollageLayout.arrange(canvas, size(first), size(second))
+                                    ?: throw IllegalStateException("Invalid portrait dimensions")
+                            listOf(pair.first, pair.second)
+                        } else {
+                            val triple =
+                                PortraitCollageLayout.arrangeThree(canvas, size(first), size(second), size(third))
+                                    ?: throw IllegalStateException("Invalid portrait dimensions")
+                            listOf(triple.first, triple.second, triple.third)
+                        }
                     val pair =
                         withContext(Dispatchers.IO) {
-                            check(hasDisplayResolution(first, panel, fitInside = true)) { "First portrait is too small" }
-                            check(hasDisplayResolution(second, panel, fitInside = true)) { "Second portrait is too small" }
+                            fun target(box: PortraitCollageLayout.Box) = (box.right - box.left) to (box.bottom - box.top)
+                            check(hasDisplayResolution(first, target(boxes[0]), fitInside = false)) { "First portrait is too small" }
+                            check(hasDisplayResolution(second, target(boxes[1]), fitInside = false)) { "Second portrait is too small" }
+                            if (third !=
+                                null
+                            ) {
+                                check(
+                                    hasDisplayResolution(third, target(boxes[2]), fitInside = false),
+                                ) { "Third portrait is too small" }
+                            }
                             check(KrillPortraitPairing.isPair(pairingPhoto(first), pairingPhoto(second), panel.first, panel.second)) {
                                 "Photos are not a Krill pair"
                             }
@@ -543,30 +599,96 @@ class ImagePlayerView : FrameLayout {
                             suspend fun load(
                                 media: AerialMedia,
                                 key: String,
-                            ): SuccessResult {
+                                box: PortraitCollageLayout.Box,
+                            ): Pair<SuccessResult, Boolean> {
+                                val panelWidth = box.right - box.left
+                                val panelHeight = box.bottom - box.top
+                                val cropUrl =
+                                    if (isPrivateCropEnabled(media)) {
+                                        KrillFeed.privatePanelCrop(
+                                            media.uri.toString(),
+                                            panelWidth,
+                                            panelHeight,
+                                            media.metadata.focusRevision,
+                                        )
+                                    } else {
+                                        null
+                                    }
+                                if (cropUrl != null) {
+                                    val cropAccess = acquirePrivateAccess(media, cropUrl)
+                                    if (cropAccess != null) {
+                                        try {
+                                            cropAccess.second.onCancel { job.cancel() }
+                                            val cropRequest =
+                                                ImageRequest
+                                                    .Builder(context.applicationContext)
+                                                    .data(cropUrl)
+                                                    .diskCacheKey(cropAccess.first)
+                                                    .memoryCacheKey(cropAccess.first)
+                                                    .apply { if (forceOfflineForTest()) networkCachePolicy(CachePolicy.DISABLED) }
+                                                    .size(panelWidth, panelHeight)
+                                                    .allowHardware(true)
+                                                    .build()
+                                            val result = imageLoader.execute(cropRequest)
+                                            if (cropAccess.second.isValid() && result is SuccessResult) return result to true
+                                        } finally {
+                                            cropAccess.second.close()
+                                        }
+                                    }
+                                }
                                 val request =
                                     ImageRequest
                                         .Builder(context.applicationContext)
                                         .data(stripCredentialsForCoil(media))
                                         .diskCacheKey(key)
                                         .memoryCacheKey(key)
+                                        .scale(Scale.FILL)
                                         .apply { if (forceOfflineForTest()) networkCachePolicy(CachePolicy.DISABLED) }
-                                        .size(panel.first, panel.second)
+                                        .size(panelWidth, panelHeight)
                                         .allowHardware(true)
                                         .build()
-                                return imageLoader.execute(request) as? SuccessResult ?: throw java.io.IOException("Portrait unavailable")
+                                val original =
+                                    imageLoader.execute(request) as? SuccessResult ?: throw java.io.IOException("Portrait unavailable")
+                                return original to false
                             }
-                            load(first, access1.first) to load(second, access2.first)
+                            listOf(load(first, access1.first, boxes[0]), load(second, access2.first, boxes[1])) +
+                                if (third != null && access3 != null) listOf(load(third, access3.first, boxes[2])) else emptyList()
                         }
-                    if (generation != imageGeneration || !access1.second.isValid() || !access2.second.isValid()) return@launch
-                    val firstSize = PortraitCollageLayout.Size(first.metadata.width ?: 0, first.metadata.height ?: 0)
-                    val secondSize = PortraitCollageLayout.Size(second.metadata.width ?: 0, second.metadata.height ?: 0)
+                    if (generation != imageGeneration || !access1.second.isValid() || !access2.second.isValid() ||
+                        (access3 != null && !access3.second.isValid())
+                    ) {
+                        return@launch
+                    }
+                    val firstSize = PortraitCollageLayout.Size(pair[0].first.image.width, pair[0].first.image.height)
+                    val secondSize = PortraitCollageLayout.Size(pair[1].first.image.width, pair[1].first.image.height)
+
+                    fun focus(
+                        media: AerialMedia,
+                        usedServerCrop: Boolean,
+                    ): FocusCrop.Point? {
+                        val x = media.metadata.focusX ?: return null
+                        val y = media.metadata.focusY ?: return null
+                        return if (usedServerCrop) null else FocusCrop.Point(x, y)
+                    }
                     val drawable =
                         PortraitCollageDrawable(
-                            pair.first.image.asDrawable(resources),
-                            pair.second.image.asDrawable(resources),
+                            pair[0].first.image.asDrawable(resources),
+                            pair[1].first.image.asDrawable(resources),
                             firstSize,
                             secondSize,
+                            pair
+                                .getOrNull(2)
+                                ?.first
+                                ?.image
+                                ?.asDrawable(resources),
+                            pair
+                                .getOrNull(2)
+                                ?.first
+                                ?.image
+                                ?.let { PortraitCollageLayout.Size(it.width, it.height) },
+                            focus(first, pair[0].second),
+                            focus(second, pair[1].second),
+                            if (third != null && pair.size > 2) focus(third, pair[2].second) else null,
                         )
                     blurHelper.update(null)
                     foregroundIsPrivate = true
@@ -585,6 +707,7 @@ class ImagePlayerView : FrameLayout {
                 } finally {
                     firstAccess?.second?.close()
                     secondAccess?.second?.close()
+                    thirdAccess?.second?.close()
                 }
             }
     }
@@ -788,6 +911,7 @@ class ImagePlayerView : FrameLayout {
                         if (privateKey != null) {
                             diskCacheKey(privateKey)
                             memoryCacheKey(privateKey)
+                            scale(Scale.FILL)
                             if (forceOfflineForTest()) networkCachePolicy(CachePolicy.DISABLED)
                         }
                     }.size(targetWidth, targetHeight)
@@ -804,6 +928,7 @@ class ImagePlayerView : FrameLayout {
                                 blurHelper.update(drawable.takeIf { shouldShowBlurBackground(media, it) })
                                 foregroundIsPrivate = isPrivateKrillImage(media)
                                 setForegroundDrawable(drawable)
+                                setScaleMode(image.width, image.height, media, cropFallback)
                             }
                         },
                     ).listener(
@@ -812,7 +937,7 @@ class ImagePlayerView : FrameLayout {
                             if (media.source == AerialMediaSource.KRILL) {
                                 Timber.d("Krill image loaded from ${result.dataSource}")
                             }
-                            setScaleMode(result.image.width, result.image.height, media)
+                            setScaleMode(result.image.width, result.image.height, media, cropFallback)
                             if (media.source == AerialMediaSource.KRILL && !cropFallback) {
                                 val cropUrl =
                                     runCatching {
@@ -823,6 +948,7 @@ class ImagePlayerView : FrameLayout {
                                             targetWidth,
                                             targetHeight,
                                             privateSmartCrop = isPrivateCropEnabled(media),
+                                            focusRevision = media.metadata.focusRevision,
                                         )
                                     }.getOrNull()
                                 if (cropUrl != null) {
@@ -895,6 +1021,7 @@ class ImagePlayerView : FrameLayout {
     }
 
     private fun setForegroundDrawable(drawable: Drawable?) {
+        activeFocus = null
         (foregroundImageView.drawable as? Animatable)?.stop()
         foregroundImageView.setImageDrawable(drawable)
         (drawable as? Animatable)?.start()
@@ -1025,9 +1152,45 @@ class ImagePlayerView : FrameLayout {
         width: Int,
         height: Int,
         media: AerialMedia,
+        alreadyCropped: Boolean,
     ) {
+        if (isPrivateKrillImage(media) && !alreadyCropped) {
+            // Fill the screen unless the known source would have to be enlarged; then fit it over the blurred backdrop.
+            val (screenWidth, screenHeight) = resolveTargetSize()
+            if (!FocusCrop.canFill(media.metadata.width, media.metadata.height, screenWidth, screenHeight)) {
+                activeFocus = null
+                foregroundImageView.scaleType = ImageView.ScaleType.FIT_CENTER
+                return
+            }
+        }
+        val x = media.metadata.focusX
+        val y = media.metadata.focusY
+        if (isPrivateKrillImage(media) && !alreadyCropped && x != null && y != null) {
+            activeFocus = FocusCrop.Point(x, y)
+            if (applyFocusedPlacement()) return
+        }
         foregroundImageView.scaleType =
-            if (useNativeBorder(media)) ImageView.ScaleType.CENTER_INSIDE else resolveForegroundScaleType(width, height)
+            if (isPrivateKrillImage(media)) ImageView.ScaleType.CENTER_CROP else resolveForegroundScaleType(width, height)
+    }
+
+    private fun applyFocusedPlacement(): Boolean {
+        val focus = activeFocus ?: return false
+        val drawable = foregroundImageView.drawable ?: return false
+        val placement =
+            FocusCrop.place(
+                drawable.intrinsicWidth,
+                drawable.intrinsicHeight,
+                foregroundImageView.width,
+                foregroundImageView.height,
+                focus,
+            ) ?: return false
+        foregroundImageView.scaleType = ImageView.ScaleType.MATRIX
+        foregroundImageView.imageMatrix =
+            Matrix().apply {
+                setScale(placement.scale, placement.scale)
+                postTranslate(placement.x, placement.y)
+            }
+        return true
     }
 
     private fun resolveForegroundScaleType(

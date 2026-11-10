@@ -22,14 +22,18 @@ internal class KrillSessionManager(
     fun saveIf(
         session: KrillTokenStore.Session,
         allowed: () -> Boolean,
-    ): Boolean =
-        KrillFrameCache.withSessionGate(appContext) {
-            synchronized(stateLock) {
-                if (!allowed()) return@synchronized false
-                store.save(session.copy(cacheNamespace = UUID.randomUUID().toString()))
-                true
+    ): Boolean {
+        if (!allowed()) return false
+        return KrillFrameCache.withSessionReplacement {
+            KrillFrameCache.withSessionGate(appContext) {
+                synchronized(stateLock) {
+                    if (!allowed()) return@synchronized false
+                    store.save(session.copy(cacheNamespace = UUID.randomUUID().toString()))
+                    true
+                }
             }
         }
+    }
 
     /** Upgrade older sessions once, preserving the namespace across app restarts. */
     fun cachedSession(): KrillTokenStore.Session? =

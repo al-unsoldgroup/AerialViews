@@ -8,8 +8,20 @@ import org.junit.jupiter.api.Test
 import java.security.MessageDigest
 
 class KrillCachedMetadataRefreshTest {
-    private val day = 24 * 60 * 60 * 1000L
+    private val refreshInterval = 4 * 60 * 1000L
     private val now = 1_800_000_000_000L
+
+    @Test
+    fun `unchanged library revision avoids another full feed until the daily caption refresh`() {
+        val key = KrillCachedMetadataRefresh.captionRefreshKey("ns", 42L)
+        assertTrue(KrillCachedMetadataRefresh.revisionStillFresh(key, now - 1000L, key, now, "7", "7", "true", true))
+        assertFalse(KrillCachedMetadataRefresh.revisionStillFresh(key, now - 1000L, key, now, "7", "8", "true", true))
+        assertFalse(KrillCachedMetadataRefresh.revisionStillFresh(key, now - 24 * 60 * 60 * 1000L, key, now, "7", "7", "true", true))
+        assertFalse(KrillCachedMetadataRefresh.revisionStillFresh("another", now - 1000L, key, now, "7", "7", "true", true))
+        assertFalse(KrillCachedMetadataRefresh.revisionStillFresh(key, now - 1000L, key, now, null, null, "true", true))
+        assertFalse(KrillCachedMetadataRefresh.revisionStillFresh(key, now - 1000L, key, now, "7", "7", "false", true))
+        assertFalse(KrillCachedMetadataRefresh.revisionStillFresh(key, now - 1000L, key, now, "7", "7", null, true))
+    }
 
     private fun legacyKey(
         namespace: String,
@@ -28,11 +40,11 @@ class KrillCachedMetadataRefreshTest {
     }
 
     @Test
-    fun `a matching recent refresh is reused for up to a day`() {
+    fun `a matching recent refresh is reused for up to four minutes`() {
         val key = KrillCachedMetadataRefresh.captionRefreshKey("ns", 42L)
         assertEquals(key, KrillCachedMetadataRefresh.captionRefreshKey("ns", 42L))
         assertTrue(KrillCachedMetadataRefresh.captionsFresh(key, now - 60_000L, key, now))
-        assertFalse(KrillCachedMetadataRefresh.captionsFresh(key, now - day, key, now))
+        assertFalse(KrillCachedMetadataRefresh.captionsFresh(key, now - refreshInterval, key, now))
         assertFalse(KrillCachedMetadataRefresh.captionsFresh(key, now + 60_000L, key, now))
         assertFalse(KrillCachedMetadataRefresh.captionsFresh(key, 0L, key, now))
         assertFalse(KrillCachedMetadataRefresh.captionsFresh(null, now - 60_000L, key, now))

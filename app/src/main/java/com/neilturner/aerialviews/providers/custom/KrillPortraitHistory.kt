@@ -15,9 +15,17 @@ internal class KrillPortraitHistory(
         start: Int,
         firstUrl: String,
         secondUrl: String,
+        thirdUrl: String? = null,
     ) {
         if (namespace.isBlank() || start < 0 || end < 0) return
-        prefs.edit().putString(key(namespace, end), "$start:${hash("$namespace:$firstUrl")}:${hash("$namespace:$secondUrl")}").apply()
+        val fields =
+            listOfNotNull(
+                start.toString(),
+                hash("$namespace:$firstUrl"),
+                hash("$namespace:$secondUrl"),
+                thirdUrl?.let { hash("$namespace:$it") },
+            )
+        prefs.edit().putString(key(namespace, end), fields.joinToString(":")).apply()
     }
 
     fun findStart(
@@ -27,7 +35,7 @@ internal class KrillPortraitHistory(
     ): Int? {
         if (namespace.isBlank() || end < 0) return null
         val fields = prefs.getString(key(namespace, end), null)?.split(':') ?: return null
-        if (fields.size != 3 || fields[2] != hash("$namespace:$secondUrl")) return null
+        if (fields.size !in 3..4 || fields.last() != hash("$namespace:$secondUrl")) return null
         return fields[0].toIntOrNull()?.takeIf { it >= 0 }
     }
 
@@ -37,7 +45,16 @@ internal class KrillPortraitHistory(
         firstUrl: String,
     ): Boolean {
         val fields = prefs.getString(key(namespace, end), null)?.split(':') ?: return false
-        return fields.size == 3 && fields[1] == hash("$namespace:$firstUrl")
+        return fields.size in 3..4 && fields[1] == hash("$namespace:$firstUrl")
+    }
+
+    fun matchesSecond(
+        namespace: String,
+        end: Int,
+        secondUrl: String,
+    ): Boolean {
+        val fields = prefs.getString(key(namespace, end), null)?.split(':') ?: return false
+        return fields.size == 4 && fields[2] == hash("$namespace:$secondUrl")
     }
 
     fun remove(
@@ -66,6 +83,22 @@ internal class KrillPortraitHistory(
         firstUrl: String,
         secondUrl: String,
     ): Boolean = namespace.isNotBlank() && prefs.getBoolean(rejectionKey(namespace, firstUrl, secondUrl), false)
+
+    fun rejectTriple(
+        namespace: String,
+        firstUrl: String,
+        secondUrl: String,
+        thirdUrl: String,
+    ) {
+        if (namespace.isNotBlank()) prefs.edit().putBoolean(tripleKey(namespace, firstUrl, secondUrl, thirdUrl), true).apply()
+    }
+
+    fun isTripleRejected(
+        namespace: String,
+        firstUrl: String,
+        secondUrl: String,
+        thirdUrl: String,
+    ): Boolean = namespace.isNotBlank() && prefs.getBoolean(tripleKey(namespace, firstUrl, secondUrl, thirdUrl), false)
 
     fun useNativeBorder(
         namespace: String,
@@ -101,6 +134,16 @@ internal class KrillPortraitHistory(
         cacheStamp: Long,
     ) {
         prefs.edit().remove("replan:${hash("$namespace:$cacheStamp")}").apply()
+    }
+
+    fun needsCadenceUpgrade(namespace: String): Boolean = !prefs.getBoolean("cadence-v2:${hash(namespace)}", false)
+
+    fun markCadenceUpgraded(namespace: String) {
+        prefs.edit().putBoolean("cadence-v2:${hash(namespace)}", true).apply()
+    }
+
+    fun invalidateCadence(namespace: String) {
+        prefs.edit().remove("cadence-v2:${hash(namespace)}").apply()
     }
 
     fun recordPlanTimeout(
@@ -161,6 +204,16 @@ internal class KrillPortraitHistory(
             secondUrl: String,
         ): String {
             val photos = listOf(hash("$namespace:$firstUrl"), hash("$namespace:$secondUrl")).sorted()
+            return rejectionPrefix(namespace) + hash(photos.joinToString(":"))
+        }
+
+        private fun tripleKey(
+            namespace: String,
+            firstUrl: String,
+            secondUrl: String,
+            thirdUrl: String,
+        ): String {
+            val photos = listOf(firstUrl, secondUrl, thirdUrl).map { hash("$namespace:$it") }.sorted()
             return rejectionPrefix(namespace) + hash(photos.joinToString(":"))
         }
 

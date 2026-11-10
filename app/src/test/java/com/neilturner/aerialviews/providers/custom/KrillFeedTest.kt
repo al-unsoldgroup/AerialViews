@@ -12,17 +12,48 @@ import org.junit.jupiter.api.Test
 
 class KrillFeedTest {
     @Test
-    fun `private smart crop keeps selected library and avoids enlarging photos`() {
+    fun `private portrait panel requests preserve selected space and use automatic crop`() {
+        val image = "https://photos.example/api/frame/media/picture/image?space=mine"
+        assertEquals(
+            "https://photos.example/api/frame/media/picture/image?space=mine&crop=auto&width=925&height=1080",
+            KrillFeed.privatePanelCrop(image, 925, 1080),
+        )
+        assertNull(KrillFeed.privatePanelCrop("https://photos.example/public/image", 925, 1080))
+        assertNull(KrillFeed.privatePanelCrop(image, 926, 1080))
+        assertEquals(
+            "https://photos.example/api/frame/media/picture/image?space=mine&crop=auto&width=640&height=505",
+            KrillFeed.privatePanelCrop(image, 640, 505),
+        )
+        assertEquals(
+            "https://photos.example/api/frame/media/picture/image?space=mine&crop=auto&width=640&height=505&focus_revision=7",
+            KrillFeed.privatePanelCrop(image, 640, 505, 7),
+        )
+    }
+
+    @Test
+    fun `private smart crop keeps the selected library and fills the display`() {
         val image = "https://photos.example/api/frame/media/picture/image?space=mine"
         assertEquals(
             "https://photos.example/api/frame/media/picture/image?space=mine&crop=auto&width=1920&height=1080",
             KrillFeed.cropForDimensions(image, 2400, 1600, 1920, 1080, privateSmartCrop = true),
         )
         assertNull(KrillFeed.cropForDimensions(image, 2400, 1600, 1920, 1080))
-        assertNull(KrillFeed.cropForDimensions(image, 1200, 800, 1920, 1080, privateSmartCrop = true))
+        assertEquals(
+            "https://photos.example/api/frame/media/picture/image?space=mine&crop=auto&width=1920&height=1080",
+            KrillFeed.cropForDimensions(image, 1200, 800, 1920, 1080, privateSmartCrop = true),
+        )
         assertNull(KrillFeed.cropForDimensions(image, 1920, 1080, 1920, 1080, privateSmartCrop = true))
         assertNull(KrillFeed.cropForDimensions(image, 2400, 1600, 1900, 1000, privateSmartCrop = true))
         assertNull(KrillFeed.cropForDimensions("https://photos.example/public/image", 2400, 1600, 1920, 1080, privateSmartCrop = true))
+    }
+
+    @Test
+    fun `private portrait can request a full screen automatic crop`() {
+        val image = "https://photos.example/api/frame/media/picture/image?space=mine"
+        assertEquals(
+            "https://photos.example/api/frame/media/picture/image?space=mine&crop=auto&width=1920&height=1080",
+            KrillFeed.cropForDimensions(image, 2400, 3200, 1920, 1080, privateSmartCrop = true),
+        )
     }
 
     @Test

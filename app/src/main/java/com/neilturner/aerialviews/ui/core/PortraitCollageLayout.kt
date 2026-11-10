@@ -1,6 +1,6 @@
 package com.neilturner.aerialviews.ui.core
 
-/** Placement of two uncropped photographs on a landscape canvas. */
+/** Viewports for two photographs on a landscape canvas. */
 internal object PortraitCollageLayout {
     data class Size(
         val width: Int,
@@ -14,6 +14,26 @@ internal object PortraitCollageLayout {
         val bottom: Int,
     )
 
+    fun arrangeThree(
+        canvas: Size,
+        first: Size,
+        second: Size,
+        third: Size,
+    ): Triple<Box, Box, Box>? {
+        if (canvas.width <= 0 || canvas.height <= 0 || listOf(first, second, third).any { it.width <= 0 || it.height <= 0 }) {
+            return null
+        }
+        val gutter = (canvas.height * 70L / 1080).toInt().coerceAtLeast(1)
+        val rightStart = (canvas.width * 2L / 3).toInt()
+        val upperHeight = (canvas.height - gutter) / 2
+        if (rightStart <= gutter || rightStart >= canvas.width || upperHeight <= 0) return null
+        return Triple(
+            Box(0, 0, rightStart - gutter, canvas.height),
+            Box(rightStart, 0, canvas.width, upperHeight),
+            Box(rightStart, upperHeight + gutter, canvas.width, canvas.height),
+        )
+    }
+
     fun arrange(
         canvas: Size,
         first: Size,
@@ -22,28 +42,11 @@ internal object PortraitCollageLayout {
         if (canvas.width <= 0 || canvas.height <= 0 || first.width <= 0 || first.height <= 0 || second.width <= 0 || second.height <= 0) {
             return null
         }
-        // The margin and gutter scale with the output and leave a calm border around the photos.
-        val margin = (canvas.height * 0.025).toInt().coerceAtLeast(1)
-        val gutter = (canvas.height * 0.0125).toInt().coerceAtLeast(1)
-        val availableWidth = canvas.width - 2 * margin - gutter
-        val availableHeight = canvas.height - 2 * margin
-        if (availableWidth < 2 || availableHeight <= 0) return null
+        // 70 pixels at 1080p is approximately one inch on a 32-inch 16:9 display.
+        val gutter = (canvas.height * 70L / 1080).toInt().coerceAtLeast(1)
+        val availableWidth = canvas.width - gutter
+        if (availableWidth < 2) return null
         val leftWidth = availableWidth / 2
-        val rightWidth = availableWidth - leftWidth
-
-        fun fit(
-            size: Size,
-            left: Int,
-            panelWidth: Int,
-        ): Box {
-            val scale = minOf(panelWidth.toDouble() / size.width, availableHeight.toDouble() / size.height)
-            val width = (size.width * scale).toInt().coerceAtLeast(1)
-            val height = (size.height * scale).toInt().coerceAtLeast(1)
-            val x = left + (panelWidth - width) / 2
-            val y = margin + (availableHeight - height) / 2
-            return Box(x, y, x + width, y + height)
-        }
-
-        return fit(first, margin, leftWidth) to fit(second, margin + leftWidth + gutter, rightWidth)
+        return Box(0, 0, leftWidth, canvas.height) to Box(leftWidth + gutter, 0, canvas.width, canvas.height)
     }
 }

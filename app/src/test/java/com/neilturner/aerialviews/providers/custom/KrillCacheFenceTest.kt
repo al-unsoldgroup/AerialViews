@@ -7,12 +7,54 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 class KrillCacheFenceTest {
+    @Test
+    fun `cancelled drain leaves the fence revoked and leases intact`() {
+        val fence = KrillCacheFence()
+        val lease = fence.acquire("session")!!
+        val generation = fence.revoke("session")
+        assertThrows(CancellationException::class.java) {
+            fence.awaitDrained("session", 30_000) { throw CancellationException() }
+        }
+        assertNull(fence.acquire("session"))
+        assertFalse(fence.reopenDrained("session", generation))
+        lease.close()
+        assertTrue(fence.reopenDrained("session", generation))
+    }
+
+    @Test
+    fun `reconciliation can reopen only after old leases have drained`() {
+        val fence = KrillCacheFence()
+        val old = fence.acquire("session")!!
+        assertFalse(fence.reopenDrained("session", 1))
+        val generation = fence.revoke("session")
+        assertFalse(fence.reopenDrained("session", generation))
+        assertNull(fence.acquire("session"))
+        old.close()
+        assertTrue(fence.reopenDrained("session", generation))
+        assertFalse(old.isValid())
+        val fresh = fence.acquire("session")!!
+        assertTrue(fresh.isValid())
+        fresh.close()
+    }
+
+    @Test
+    fun `a later revocation cannot be reopened by an older cleanup`() {
+        val fence = KrillCacheFence()
+        val old = fence.revoke("session")
+        val current = fence.revoke("session")
+        assertFalse(fence.reopenDrained("session", old))
+        assertNull(fence.acquire("session"))
+        assertTrue(fence.reopenDrained("session", current))
+    }
+
     @Test
     fun `logout blocks new operations and waits for existing requests`() {
         val fence = KrillCacheFence()

@@ -21,6 +21,75 @@ import java.util.concurrent.atomic.AtomicReference
 
 internal class MediaPlaylistTest {
     @Test
+    fun `appending invalidates a refill started before the source grew`() =
+        runTest {
+            val photos = MutableList(60) { testMedia() }
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            val calls = AtomicInteger()
+            val result = AtomicReference<AerialMedia?>()
+            val playlist =
+                MediaPlaylist(photos.take(50), size = 60, fetchChunk = { offset, limit ->
+                    if (calls.incrementAndGet() == 1) {
+                        val old = photos.drop(offset).take(limit)
+                        entered.countDown()
+                        check(release.await(5, TimeUnit.SECONDS))
+                        old
+                    } else {
+                        photos.drop(offset).take(limit)
+                    }
+                }, countSource = { photos.size })
+            val worker = Thread { result.set(playlist.itemAt(55)) }
+            worker.start()
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            photos.add(testMedia())
+            playlist.refreshAppendedSourceSize()
+            release.countDown()
+            worker.join(5000)
+            assertFalse(worker.isAlive)
+            assertSame(photos[55], result.get())
+            assertEquals(61, playlist.size)
+            assertSame(photos[60], playlist.itemAt(60))
+        }
+
+    @Test
+    fun `appended cached items become reachable without moving the current cursor`() =
+        runTest {
+            val photos = MutableList(3) { testMedia() }
+            val playlist =
+                MediaPlaylist(
+                    photos.toList(),
+                    startPosition = 1,
+                    size = 3,
+                    fetchChunk = { offset, limit -> photos.drop(offset).take(limit) },
+                    countSource = { photos.size },
+                )
+            val added = testMedia()
+            photos.add(added)
+            playlist.refreshAppendedSourceSize()
+            assertEquals(4, playlist.size)
+            assertEquals(1, playlist.currentPosition)
+            assertSame(photos[2], playlist.nextItem())
+            assertSame(added, playlist.nextItem())
+        }
+
+    @Test
+    fun `in memory append deduplicates and keeps the current cursor`() {
+        fun krill(id: String): AerialMedia {
+            val uri = mockk<Uri>()
+            every { uri.toString() } returns id
+            return AerialMedia(uri, source = AerialMediaSource.KRILL)
+        }
+        val current = krill("current")
+        val added = krill("added")
+        val playlist = MediaPlaylist(listOf(current), startPosition = 0)
+        playlist.appendUncachedKrillMedia(listOf(current, added, added))
+        assertEquals(2, playlist.size)
+        assertEquals(0, playlist.currentPosition)
+        assertSame(added, playlist.nextItem())
+    }
+
+    @Test
     fun `a failed chunk read preserves playlist size and can be retried`() {
         val photos = List(60) { testMedia() }
         var calls = 0
