@@ -467,6 +467,12 @@ The library reconciliation groundwork is included but not switched on. It has a 
 
 The full unit suite passed (695 tests in 113 suites), as did the formatting check and `assembleBetaDebug`. A pre-existing race in a lock test was fixed by waiting for the cancelled job before checking it. Nothing was installed on the TV in this step.
 
+### Release plumbing and community guide (UNS-1751, 10 November)
+
+Goal: let someone else build the same frame. Added `docs/community-guide.md` (hardware, wireless-debugging install, sign-in, sources, schedule, modes, captions, collages, iPhone share sheet, troubleshooting) and `docs/release-checklist.md` (versioning, signing files and secrets, on-device checklist, GitHub release, rollback), plus a draft epic PR description in `release-pr-draft.md`.
+
+Verified without signing secrets: `:app:assembleGithubRelease` stops at `validateSigningGithubRelease` ("Keystore file not set for signing config legacy"), which is the expected failure. `:app:minifyGithubReleaseWithR8` passes. With a throwaway key created outside the repository and deleted afterwards, `assembleGithubRelease` produced an APK for `com.neilturner.aerialviews`, versionCode 151, versionName 1.8.6. A signed release with the real key, publication and TV install are not done. The guides use placeholders only.
+
 ## Next experiments
 
 1. Finish reviewing the Krill integration and artwork import, then verify its authorized deployment and private image delivery.
