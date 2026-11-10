@@ -199,9 +199,6 @@ class ScreenController(
     private var pauseAfterNextImage = false
     private var photoMenuHasPair = false
     private var photoMenuIsVideo = false
-    private var deletionTarget: AerialMedia? = null
-    private var deletionNamespace: String? = null
-    private var photoMenuHasDelete = false
     private val excludedPhotos by lazy { context.getSharedPreferences(FrameRotationPrefs.EXCLUSIONS, Context.MODE_PRIVATE) }
     private var forcedMuteVideo = false
     private var userMutedVideo = !GeneralPrefs.playsVideoAudio
@@ -368,7 +365,13 @@ class ScreenController(
         GeneralPrefs.migrateKrillCaptionOverlays()
         dashboardScheduleJob =
             mainScope.launch {
+                val offlineTracker = OfflineTracker()
                 while (isActive) {
+                    val online = isOnline()
+                    val connectivity = offlineTracker.update(online, android.os.SystemClock.elapsedRealtime())
+                    setOfflineIndicator(connectivity.showIndicator)
+                    // Back online: retry a failed dashboard now instead of waiting out its backoff.
+                    if (connectivity.reconnected && dashboardRetryAt != 0L) dashboardRetryAt = android.os.SystemClock.elapsedRealtime()
                     val active =
                         DashboardSchedule
                             .from(
@@ -384,11 +387,13 @@ class ScreenController(
                         dashboardSchedulePending = active
                         if (!active) closeDashboard()
                     }
-                    if (active && dashboardSchedulePending && photoMenu == null && canSkip && !blackOutMode) {
+                    // Offline: keep the photos and videos playing and show the dashboard once the link is back.
+                    if (active && online && dashboardSchedulePending && photoMenu == null && canSkip && !blackOutMode) {
                         dashboardSchedulePending = false
                         showDashboard()
                     }
-                    if (active && photoMenu == null && canSkip && !blackOutMode && dashboardView == null && dashboardRetryAt != 0L &&
+                    if (active && online && photoMenu == null && canSkip && !blackOutMode && dashboardView == null &&
+                        dashboardRetryAt != 0L &&
                         android.os.SystemClock.elapsedRealtime() >= dashboardRetryAt
                     ) {
                         showDashboard()
@@ -1607,6 +1612,7 @@ class ScreenController(
         frameModeBuildJob?.cancel()
         frameModeChangeJob?.cancel()
         dashboardScheduleJob?.cancel()
+        setOfflineIndicator(false)
         closeDashboard()
         navigationGeneration++
         KrillFrameCache.removeInvalidationListener(cacheInvalidation)
@@ -1737,9 +1743,6 @@ class ScreenController(
         photoMenuHasPair = currentPortraitSlide != null
         photoMenuIsVideo = video
         // Permanent deletion belongs to the phone library, not the TV remote.
-        photoMenuHasDelete = false
-        deletionTarget = null
-        deletionNamespace = null
         ignorePhotoMenuRelease = true
         val density = resources.displayMetrics.density
         val panel =
@@ -1777,8 +1780,6 @@ class ScreenController(
             if (photoMenuHasPair) panel.addView(row(R.string.frame_split_pair))
             panel.addView(row(R.string.frame_restore_rotation))
             panel.addView(row(R.string.frame_reset_pairing_choices))
-            if (photoMenuHasDelete) panel.addView(row(if (photoMenuHasPair) R.string.frame_delete_left else R.string.frame_delete_photo))
-            if (photoMenuHasDelete && photoMenuHasPair) panel.addView(row(R.string.frame_delete_right))
         }
         panel.addView(row(R.string.frame_cancel))
         photoMenuSelection = panel.childCount - 2 // Default to cancel.
@@ -1831,30 +1832,6 @@ class ScreenController(
                     if (toggle) toggleMute()
                     return true
                 }
-                if (deletionTarget != null) {
-                    val target = deletionTarget
-                    val namespace = deletionNamespace
-                    val confirmed = photoMenuSelection == 1
-                    closePhotoOptions(false)
-                    if (confirmed && target != null && namespace != null) requestPermanentDeletion(namespace, target)
-                    return true
-                }
-                val deleteIndex = if (photoMenuHasPair) 5 else 3
-                if (photoMenuHasDelete &&
-                    (photoMenuSelection == deleteIndex || (photoMenuHasPair && photoMenuSelection == deleteIndex + 1))
-                ) {
-                    val target =
-                        if (photoMenuHasPair &&
-                            photoMenuSelection == deleteIndex + 1
-                        ) {
-                            currentPortraitSlide?.second
-                        } else {
-                            currentMedia
-                        }
-                    val namespace = runCatching { KrillSessionManager(context).cachedSession()?.cacheNamespace }.getOrNull()
-                    if (target != null && namespace != null) showDeleteConfirmation(target, namespace)
-                    return true
-                }
                 val restoreIndex = if (photoMenuHasPair) 3 else 1
                 if (photoMenuSelection == restoreIndex) excludedPhotos.edit().clear().apply()
                 val resetIndex = if (photoMenuHasPair) 4 else 2
@@ -1880,60 +1857,6 @@ class ScreenController(
         }
         return true
     }
-
-    private fun showDeleteConfirmation(
-        media: AerialMedia,
-        namespace: String,
-    ) {
-        deletionTarget = media
-        deletionNamespace = namespace
-        val panel = photoMenu as? LinearLayout ?: return
-        panel.removeAllViews()
-        for (text in listOf(R.string.frame_delete_confirm, R.string.frame_cancel, R.string.frame_delete_yes)) {
-            panel.addView(
-                TextView(context).apply {
-                    setText(text)
-                    textSize = 22f
-                    setPadding(24, 18, 24, 18)
-                },
-            )
-        }
-        photoMenuSelection = 0
-        updatePhotoMenuSelection()
-    }
-
-    private fun requestPermanentDeletion(
-        namespace: String,
-        media: AerialMedia,
-    ) {
-        mainScope.launch {
-            try {
-                val result =
-                    withContext(Dispatchers.IO) {
-                        val job = currentCoroutineContext()[Job]
-                        val client = deletionKrillClient(job)
-                        KrillDeletionRequest(
-                            context.applicationContext,
-                            client,
-                        ) { job?.ensureActive() }.submit(namespace, media.uri.toString())
-                    }
-                Toast.makeText(context, R.string.frame_delete_pending, Toast.LENGTH_LONG).show()
-                if ((result == "pending" || result == "completed") && isCurrentPhoto(media) && canSkip) skipItem()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                val pending = runCatching { KrillSessionManager(context).cachedSession()?.pendingDeletion }.getOrNull()
-                val saved = pending != null && KrillPrivateFeed.sameFramePhoto(pending.imageUrl, media.uri.toString())
-                Toast.makeText(context, if (saved) R.string.frame_delete_retry else R.string.frame_delete_error, Toast.LENGTH_LONG).show()
-                if (saved && isCurrentPhoto(media) && canSkip) skipItem()
-            }
-        }
-    }
-
-    private fun isCurrentPhoto(media: AerialMedia): Boolean =
-        listOfNotNull(currentMedia, currentPortraitSlide?.second, currentPortraitSlide?.third).any {
-            KrillPrivateFeed.sameFramePhoto(it.uri.toString(), media.uri.toString())
-        }
 
     /** Check for caption updates while this screen remains active. */
     private suspend fun refreshCaptionsWhileActive() {
@@ -2077,8 +2000,6 @@ class ScreenController(
     private fun closePhotoOptions(remove: Boolean) {
         (photoMenu?.parent as? ViewGroup)?.removeView(photoMenu)
         photoMenu = null
-        deletionTarget = null
-        deletionNamespace = null
         if (remove) {
             currentMedia?.let { media -> rotationKey(media)?.let { excludedPhotos.edit().putBoolean(it, true).apply() } }
             if (!photoMenuWasPaused) resumeMedia()
@@ -2380,6 +2301,43 @@ class ScreenController(
             }
         (view as FrameLayout).addView(webView, FrameLayout.LayoutParams(-1, -1))
         webView.loadUrl(url)
+    }
+
+    private fun isOnline(): Boolean =
+        NetworkHelper.getActiveNetworkCapabilities(context)?.let {
+            it.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                it.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        } == true
+
+    private var offlineIndicator: TextView? = null
+
+    /** A small corner label while the frame is offline and playing from its cache. */
+    private fun setOfflineIndicator(show: Boolean) {
+        if (show == (offlineIndicator != null)) return
+        val parent = view as? FrameLayout ?: return
+        if (!show) {
+            offlineIndicator?.let { parent.removeView(it) }
+            offlineIndicator = null
+            return
+        }
+        val density = resources.displayMetrics.density
+        offlineIndicator =
+            TextView(context).apply {
+                setText(R.string.frame_offline)
+                textSize = 14f
+                setTextColor(Color.WHITE)
+                setBackgroundColor(Color.argb(160, 0, 0, 0))
+                setPadding((10 * density).toInt(), (4 * density).toInt(), (10 * density).toInt(), (4 * density).toInt())
+                parent.addView(
+                    this,
+                    FrameLayout
+                        .LayoutParams(
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            Gravity.TOP or Gravity.END,
+                        ).apply { setMargins(0, (16 * density).toInt(), (16 * density).toInt(), 0) },
+                )
+            }
     }
 
     private fun closeDashboard() {
