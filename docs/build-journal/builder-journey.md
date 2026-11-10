@@ -475,6 +475,8 @@ On the frame, an item tagged or categorised as art populates the ART category, s
 
 This follows the task decision for this milestone (uncropped by default) rather than the plan's earlier "art fills the screen by default" line. The full unit suite, the formatting check and `assembleBetaDebug` passed. Nothing was installed on the TV in this step.
 
+Review fix, 10 November: marking or unmarking art after an item was already cached did not reach the frame. The full refresh wrote captions and pairing but never rewrote tags on existing cached rows, so the item stayed a photo until the cache was rebuilt. The pairing refresh now carries the feed tags into the cached row and the in-memory item, and rebuilds the mode index when they change. New tests add and remove the art tag on a cached row and on a window item. Full unit suite: 698 tests, 0 failures; formatting check and `assembleBetaDebug` passed.
+
 ## Next experiments
 
 1. Finish reviewing the Krill integration and artwork import, then verify its authorized deployment and private image delivery.

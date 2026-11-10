@@ -141,6 +141,7 @@ internal class FakePlaylistCacheDao : PlaylistCacheDao {
         focusRevision: Long?,
         focusX: Float?,
         focusY: Float?,
+        tagsJson: String?,
     ): Int {
         var changed = 0
         mediaItems.indices.forEach { index ->
@@ -148,7 +149,7 @@ internal class FakePlaylistCacheDao : PlaylistCacheDao {
             if (item.source == "KRILL" && item.uri == uri &&
                 (
                     item.pairPartner != partner || item.pairThird != third || item.focusRevision != focusRevision ||
-                        item.focusX != focusX || item.focusY != focusY
+                        item.focusX != focusX || item.focusY != focusY || (tagsJson != null && item.tagsJson != tagsJson)
                 )
             ) {
                 mediaItems[index] =
@@ -158,6 +159,7 @@ internal class FakePlaylistCacheDao : PlaylistCacheDao {
                         focusRevision = focusRevision,
                         focusX = focusX,
                         focusY = focusY,
+                        tagsJson = tagsJson ?: item.tagsJson,
                     )
                 changed++
             }

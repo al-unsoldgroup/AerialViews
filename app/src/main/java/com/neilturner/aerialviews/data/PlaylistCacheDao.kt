@@ -25,6 +25,8 @@ data class KrillPairUpdate(
     val focusRevision: Long? = null,
     val focusX: Float? = null,
     val focusY: Float? = null,
+    /** Fresh feed tags; null leaves the cached tags alone. Marking art in Krill must reach cached rows. */
+    val tagsJson: String? = null,
 )
 
 data class KrillCachedCaption(
@@ -225,10 +227,10 @@ interface PlaylistCacheDao {
 
     @Query(
         "UPDATE cached_media SET pairPartner = :partner, pairThird = :third, focusRevision = :focusRevision, " +
-            "focusX = :focusX, focusY = :focusY " +
+            "focusX = :focusX, focusY = :focusY, tagsJson = COALESCE(:tagsJson, tagsJson) " +
             "WHERE source = 'KRILL' AND uri = :uri AND " +
             "(pairPartner IS NOT :partner OR pairThird IS NOT :third OR focusRevision IS NOT :focusRevision " +
-            "OR focusX IS NOT :focusX OR focusY IS NOT :focusY)",
+            "OR focusX IS NOT :focusX OR focusY IS NOT :focusY OR (:tagsJson IS NOT NULL AND tagsJson IS NOT :tagsJson))",
     )
     suspend fun updateKrillPair(
         uri: String,
@@ -237,6 +239,7 @@ interface PlaylistCacheDao {
         focusRevision: Long?,
         focusX: Float?,
         focusY: Float?,
+        tagsJson: String?,
     ): Int
 
     @Transaction
@@ -246,7 +249,10 @@ interface PlaylistCacheDao {
     ): Int? {
         if (getPlaylistState()?.cachedAt != cachedAt) return null
         var changed = 0
-        for (item in items) changed += updateKrillPair(item.uri, item.partner, item.third, item.focusRevision, item.focusX, item.focusY)
+        for (item in items) {
+            changed +=
+                updateKrillPair(item.uri, item.partner, item.third, item.focusRevision, item.focusX, item.focusY, item.tagsJson)
+        }
         return changed
     }
 

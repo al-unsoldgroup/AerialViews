@@ -151,10 +151,18 @@ class MediaPlaylist(
         }
     }
 
-    fun updateCachedPairing(fresh: List<AerialMedia>) {
+    /**
+     * Apply fresh feed pairing, focus and tags (an art mark can change after upload). [storeChanged] reports that
+     * cached rows outside the window changed, so the frame mode index must be rebuilt.
+     */
+    fun updateCachedPairing(
+        fresh: List<AerialMedia>,
+        storeChanged: Boolean = false,
+    ) {
         val byUri = fresh.associateBy { it.uri.toString() }
         synchronized(windowLock) {
             refillGeneration++
+            var tagsChanged = storeChanged
             windowVideos.forEach { cached ->
                 val updated = byUri[cached.uri.toString()] ?: return@forEach
                 if (cached.source != com.neilturner.aerialviews.models.enums.AerialMediaSource.KRILL) return@forEach
@@ -163,7 +171,13 @@ class MediaPlaylist(
                 cached.metadata.focusRevision = updated.metadata.focusRevision
                 cached.metadata.focusX = updated.metadata.focusX
                 cached.metadata.focusY = updated.metadata.focusY
+                if (!cached.metadata.tagsKnown || cached.metadata.tags != updated.metadata.tags) {
+                    cached.metadata.tags = updated.metadata.tags
+                    cached.metadata.tagsKnown = true
+                    tagsChanged = true
+                }
             }
+            if (tagsChanged) metadataRevision++
         }
     }
 
