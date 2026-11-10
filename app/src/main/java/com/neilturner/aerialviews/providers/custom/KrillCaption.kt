@@ -25,7 +25,8 @@ internal object KrillCaption {
     /** Artwork shows title and artist; otherwise place, then local capture time. Null when nothing is known. */
     fun format(fields: Fields): String? {
         val title = fields.artworkTitle.clean()
-        if (title != null) return listOfNotNull(title, fields.artworkArtist.clean()).joinToString("\n")
+        val artist = fields.artworkArtist.clean()
+        if (title != null || artist != null) return listOfNotNull(title, artist).joinToString("\n")
         val specific = fields.placeAttraction.clean() ?: fields.placeNeighborhood.clean()
         val place = listOfNotNull(specific, fields.placeCity.clean(), fields.placeCountry.clean()).distinct().joinToString(", ")
         return listOfNotNull(place.ifEmpty { null }, prettyTime(fields.capturedLocal)).joinToString("\n").ifEmpty { null }

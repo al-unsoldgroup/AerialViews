@@ -467,6 +467,14 @@ The library reconciliation groundwork is included but not switched on. It has a 
 
 The full unit suite passed (695 tests in 113 suites), as did the formatting check and `assembleBetaDebug`. A pre-existing race in a lock test was fixed by waiting for the cancelled job before checking it. Nothing was installed on the TV in this step.
 
+### Personal art in Art and Mixed modes (UNS-1750, 10 November)
+
+Personal art is a photo Al marks as art in Krill, on one item or on a multi-select. The mark is the existing `art` tag. A title and artist typed by hand are stored in the caption fields from migration 052 as verified, with source `manual`, and caption enrichment no longer overwrites them. The frame feed now also sends `category: "art"`. New Krill migration 058 bumps the library revision when the art tag or the artwork caption changes, so the TV picks up the change instead of waiting up to a day.
+
+On the frame, an item tagged or categorised as art populates the ART category, so Art mode joins the mode cycle and Mixed mode uses it at the existing 30 percent default. Art without a manual crop point is shown whole: fit to the screen on a dark neutral matte, with no server crop, no focal crop and no blurred backdrop. When Al sets a crop point with the existing focus editor, art is cropped around it like a photo. Art is never placed in a collage. The caption shows title and artist, or the artist alone.
+
+This follows the task decision for this milestone (uncropped by default) rather than the plan's earlier "art fills the screen by default" line. The full unit suite, the formatting check and `assembleBetaDebug` passed. Nothing was installed on the TV in this step.
+
 ## Next experiments
 
 1. Finish reviewing the Krill integration and artwork import, then verify its authorized deployment and private image delivery.
