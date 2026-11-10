@@ -35,14 +35,6 @@
     <string name="krill_cancel_done">Unaccepted deletion cancelled.</string>
     <string name="krill_cancel_accepted">Krill already accepted this deletion; it cannot be cancelled here.</string>
     <string name="krill_cancel_error">Could not cancel. Check library access and try again.</string>
-    <string name="frame_delete_photo">Delete photo from library</string>
-    <string name="frame_delete_left">Delete left photo from library</string>
-    <string name="frame_delete_right">Delete right photo from library</string>
-    <string name="frame_delete_confirm">Permanently delete this photo from Krill and Cloudflare?</string>
-    <string name="frame_delete_yes">Delete permanently</string>
-    <string name="frame_delete_pending">Deletion requested. The photo will be removed after confirmation.</string>
-    <string name="frame_delete_error">Deletion could not be confirmed. Check your connection and deletion permission.</string>
-    <string name="frame_delete_retry">Deletion is saved and will retry. Check your connection and deletion permission.</string>
     <string name="krill_sign_out">Sign out of Krill</string>
     <string name="krill_login_title">Sign in to Krill</string>
     <string name="krill_login_instructions">On your phone, open %1$s and enter code %2$s.</string>
@@ -1075,5 +1067,6 @@
     <string name="frame_start_on_boot">Start frame after device boots</string>
     <string name="frame_start_on_boot_summary">Requires permission to appear over other apps on supported devices.</string>
     <string name="frame_boot_permission_needed">Allow this app to appear over other apps in device settings.</string>
+    <string name="frame_offline">Offline</string>
     <string name="frame_cancel">Cancel</string>
 </resources>
