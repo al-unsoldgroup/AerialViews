@@ -68,18 +68,31 @@ internal class KrillPrivateProvider(
             krillSettingsHash(savedSession())
         }.getOrDefault("0")
 
-    override suspend fun fetch(): ProviderFetchResult {
+    internal data class SnapshotEvidence(
+        val namespace: String,
+        val revision: String?,
+        val videoAvailable: Boolean,
+    )
+
+    internal data class SnapshotResult(
+        val result: ProviderFetchResult,
+        val evidence: SnapshotEvidence?,
+    )
+
+    override suspend fun fetch(): ProviderFetchResult = fetchWithEvidence().result
+
+    internal suspend fun fetchWithEvidence(): SnapshotResult {
         return try {
             if (BuildConfig.DEBUG && context.getSharedPreferences("frame_debug", Context.MODE_PRIVATE).getBoolean("force_offline", false)) {
-                return ProviderFetchResult.Error("Krill offline test")
+                return SnapshotResult(ProviderFetchResult.Error("Krill offline test"), null)
             }
             currentCoroutineContext().ensureActive()
             val job = currentCoroutineContext()[Job]
             val client = cancellableKrillClient(job)
             val session =
                 KrillSessionManager(context).session(client) { job?.ensureActive() }
-                    ?: return ProviderFetchResult.Error("Krill login required")
-            val space = session.spaceId ?: return ProviderFetchResult.Error("Select a Krill library")
+                    ?: return SnapshotResult(ProviderFetchResult.Error("Krill login required"), null)
+            val space = session.spaceId ?: return SnapshotResult(ProviderFetchResult.Error("Select a Krill library"), null)
             currentCoroutineContext().ensureActive()
             val feed = KrillPrivateFeed(client, session.libraryOrigin, session.accessToken)
             val config = KrillPrivateFeed.config(client, session.libraryOrigin)
@@ -106,30 +119,54 @@ internal class KrillPrivateProvider(
                 } else {
                     emptyList()
                 }
-            ProviderFetchResult.Success(
-                media =
-                    (photos + videos).map { photo ->
-                        AerialMedia(
-                            photo.url.toUri(),
-                            type = if (photo.video) AerialMediaType.VIDEO else AerialMediaType.IMAGE,
-                            source = AerialMediaSource.KRILL,
-                            metadata =
-                                AerialMediaMetadata(
-                                    shortDescription = photo.description,
-                                    width = photo.width,
-                                    height = photo.height,
-                                    tags = photo.tags,
-                                    tagsKnown = true,
-                                    pairPartner = photo.pairPartner,
-                                ),
-                        )
-                    },
-                summary = "",
+            job?.ensureActive()
+            val activeSession = KrillSessionManager(context).cachedSession()
+            check(activeSession?.cacheNamespace == session.cacheNamespace) { "Krill session changed" }
+            if (config.libraryRevisionAvailable) {
+                check(feed.libraryRevision(space) == photoRevision) { "Krill library changed after fetch" }
+            }
+            val finalConfig = KrillPrivateFeed.config(client, session.libraryOrigin)
+            check(
+                finalConfig.videoAvailable == config.videoAvailable &&
+                    finalConfig.libraryRevisionAvailable == config.libraryRevisionAvailable,
+            ) {
+                "Krill feed capability changed during fetch"
+            }
+            SnapshotResult(
+                ProviderFetchResult.Success(
+                    media =
+                        (photos + videos).map { photo ->
+                            AerialMedia(
+                                photo.url.toUri(),
+                                type = if (photo.video) AerialMediaType.VIDEO else AerialMediaType.IMAGE,
+                                source = AerialMediaSource.KRILL,
+                                metadata =
+                                    AerialMediaMetadata(
+                                        shortDescription = photo.description,
+                                        width = photo.width,
+                                        height = photo.height,
+                                        tags = photo.tags,
+                                        tagsKnown = true,
+                                        pairPartner = photo.pairPartner,
+                                        pairThird = photo.pairThird,
+                                        focusRevision = photo.focusRevision,
+                                        focusX = photo.focusX,
+                                        focusY = photo.focusY,
+                                    ),
+                            )
+                        },
+                    summary = "",
+                ),
+                SnapshotEvidence(
+                    session.cacheNamespace,
+                    photoRevision.takeIf { config.libraryRevisionAvailable },
+                    config.videoAvailable,
+                ),
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            ProviderFetchResult.Error("Unable to load the Krill library")
+            SnapshotResult(ProviderFetchResult.Error("Unable to load the Krill library"), null)
         }
     }
 

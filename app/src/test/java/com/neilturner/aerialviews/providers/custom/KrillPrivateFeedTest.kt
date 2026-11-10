@@ -235,6 +235,18 @@ class KrillPrivateFeedTest {
     }
 
     @Test
+    fun `polls the selected library revision with a single-item page`() {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"total":0,"revision":"42","media":[]}"""))
+            val feed = KrillPrivateFeed(OkHttpClient(), server.url("/").toString(), "test-token")
+            assertEquals("42", feed.libraryRevision("mine"))
+            val request = server.takeRequest()
+            assertEquals("1", request.requestUrl?.queryParameter("limit"))
+            assertEquals("mine", request.requestUrl?.queryParameter("space"))
+        }
+    }
+
+    @Test
     fun `discovers public login configuration without credentials`() {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"issuer":"https://auth.example.com","clientId":"frame-client"}"""))
@@ -250,8 +262,10 @@ class KrillPrivateFeedTest {
             server.enqueue(MockResponse().setBody("""{"spaces":[{"id":"mine","name":"My library"}]}"""))
             server.enqueue(
                 MockResponse().setBody(
-                    """{"total":2,"media":[{"id":"one","title":"First","width":3000,"height":2000,"tags":["Penguin","Trip"],""" +
-                        """"pair":{"partner_id":"two","score":0.9,"reason":"same_occasion: 4 min apart"}}]}""",
+                    """{"total":2,"media":[{"id":"one","title":"First","width":3000,"height":2000,"focus_revision":7,""" +
+                        """"frame_focus":{"x":0.2,"y":0.7},""" +
+                        """"tags":["Penguin","Trip"],""" +
+                        """"pair":{"partner_id":"two","third_id":"three","score":0.9,"reason":"same_occasion: 4 min apart"}}]}""",
                 ),
             )
             server.enqueue(MockResponse().setBody("""{"total":2,"media":[{"id":"two","description":"Second"}]}"""))
@@ -264,6 +278,10 @@ class KrillPrivateFeedTest {
             assertEquals(listOf("Penguin", "Trip"), photos.first().tags)
             assertEquals(emptyList<String>(), photos.last().tags)
             assertEquals("two", photos.first().pairPartner)
+            assertEquals("three", photos.first().pairThird)
+            assertEquals(7L, photos.first().focusRevision)
+            assertEquals(0.2f, photos.first().focusX)
+            assertEquals(0.7f, photos.first().focusY)
             assertEquals(null, photos.last().pairPartner)
             assertEquals(null, photos.last().width)
             assertEquals(server.url("/api/frame/media/one/image?space=mine").toString(), photos.first().url)

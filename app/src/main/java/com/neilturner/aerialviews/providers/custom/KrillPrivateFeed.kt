@@ -276,14 +276,23 @@ internal class KrillPrivateFeed(
         @SerialName("artwork_title") val artworkTitle: String? = null,
         @SerialName("artwork_artist") val artworkArtist: String? = null,
         val pair: ServerPair? = null,
+        @SerialName("focus_revision") val focusRevision: Long? = null,
+        @SerialName("frame_focus") val frameFocus: FocusPoint? = null,
     )
 
     /** Server-chosen collage partner (UNS-1754); score and reason are informational. */
     @Serializable
     private data class ServerPair(
         @SerialName("partner_id") val partnerId: String,
+        @SerialName("third_id") val thirdId: String? = null,
         val score: Double? = null,
         val reason: String? = null,
+    )
+
+    @Serializable
+    private data class FocusPoint(
+        val x: Float,
+        val y: Float,
     )
 
     data class Item(
@@ -294,6 +303,10 @@ internal class KrillPrivateFeed(
         val tags: List<String> = emptyList(),
         val video: Boolean = false,
         val pairPartner: String? = null,
+        val pairThird: String? = null,
+        val focusRevision: Long? = null,
+        val focusX: Float? = null,
+        val focusY: Float? = null,
     )
 
     private fun get(
@@ -302,6 +315,7 @@ internal class KrillPrivateFeed(
         offset: Int? = null,
         onCall: (Call) -> (() -> Unit) = { {} },
         mediaType: String? = null,
+        pageLimit: Int = 100,
     ): String {
         val url =
             base
@@ -311,7 +325,7 @@ internal class KrillPrivateFeed(
                     if (space != null) addQueryParameter("space", space)
                     if (mediaType != null) addQueryParameter("type", mediaType)
                     if (offset != null) {
-                        addQueryParameter("limit", "100")
+                        addQueryParameter("limit", pageLimit.toString())
                         addQueryParameter("offset", offset.toString())
                     }
                 }.build()
@@ -334,6 +348,9 @@ internal class KrillPrivateFeed(
     }
 
     fun spaces(): List<Space> = JsonHelper.json.decodeFromString<Spaces>(get("/api/frame/spaces")).spaces
+
+    fun libraryRevision(space: String): String? =
+        JsonHelper.json.decodeFromString<Page>(get("/api/frame/media", space, 0, pageLimit = 1)).revision
 
     fun deletePhoto(
         imageUrl: String,
@@ -544,6 +561,16 @@ internal class KrillPrivateFeed(
                         photo.tags,
                         video,
                         photo.pair?.partnerId?.takeIf { !video && it.isNotBlank() },
+                        photo.pair?.thirdId?.takeIf { !video && it.isNotBlank() },
+                        photo.focusRevision?.takeIf { !video && it > 0 },
+                        photo.frameFocus?.x?.takeIf {
+                            !video && it.isFinite() && it in 0f..1f && photo.frameFocus.y.isFinite() &&
+                                photo.frameFocus.y in 0f..1f
+                        },
+                        photo.frameFocus?.y?.takeIf {
+                            !video && it.isFinite() && it in 0f..1f && photo.frameFocus.x.isFinite() &&
+                                photo.frameFocus.x in 0f..1f
+                        },
                     ),
                 )
             }

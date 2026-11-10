@@ -62,6 +62,13 @@ class KrillPortraitHistoryTest {
         assertTrue(values.values.none { "https://" in it })
         history.remove("account-a", 5)
         assertNull(history.findStart("account-a", 5, "https://example/second"))
+        history.save("account-a", 6, 4, "https://example/first", "https://example/second", "https://example/third")
+        assertEquals(4, history.findStart("account-a", 6, "https://example/third"))
+        assertTrue(history.matchesFirst("account-a", 6, "https://example/first"))
+        assertTrue(history.matchesSecond("account-a", 6, "https://example/second"))
+        assertFalse(history.matchesSecond("account-b", 6, "https://example/second"))
+        assertNull(history.findStart("account-a", 6, "https://example/second"))
+        assertTrue(values.values.none { "https://" in it })
         history.rejectPair("account-a", "https://example/first", "https://example/second")
 
         fun legacyHash(value: String) =
@@ -77,6 +84,9 @@ class KrillPortraitHistoryTest {
         assertTrue(history.useNativeBorder("account-a", "https://example/second"))
         assertFalse(history.useNativeBorder("account-b", "https://example/first"))
         assertFalse(history.isPairRejected("account-b", "https://example/first", "https://example/second"))
+        history.rejectTriple("account-a", "one", "two", "three")
+        assertTrue(history.isTripleRejected("account-a", "three", "one", "two"))
+        assertFalse(history.isPairRejected("account-a", "one", "two"))
         history.resetRejections("account-a")
         assertFalse(history.isPairRejected("account-a", "https://example/first", "https://example/second"))
         assertFalse(history.useNativeBorder("account-a", "https://example/first"))

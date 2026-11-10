@@ -9,21 +9,36 @@ import androidx.room3.RoomDatabase
 import androidx.sqlite.driver.AndroidSQLiteDriver
 
 @Database(
-    entities = [CachedMediaEntity::class, CachedMusicTrackEntity::class, PlaylistStateEntity::class],
-    // Version 6 adds Krill pair partners. It has no migration on purpose: the destructive fallback
-    // rebuilds the playlist cache from Krill so every cached photo carries its server pairing.
-    version = 6,
+    entities = [
+        CachedMediaEntity::class,
+        CachedMusicTrackEntity::class,
+        PlaylistStateEntity::class,
+        PrivateCacheVariant::class,
+        PrivateReconciliationJournal::class,
+        PrivateReconciliationCopy::class,
+        PrivateCacheGeneration::class,
+    ],
+    // Private cache inventory and recovery state preserve existing playlists through migration.
+    version = 14,
     exportSchema = true,
     autoMigrations = [
         AutoMigration(
             from = 1,
             to = 2,
         ), AutoMigration(from = 2, to = 3), AutoMigration(from = 3, to = 4), AutoMigration(from = 4, to = 5),
+        AutoMigration(from = 5, to = 6), AutoMigration(from = 6, to = 7), AutoMigration(from = 7, to = 8),
+        AutoMigration(from = 8, to = 9),
+        AutoMigration(from = 9, to = 10), AutoMigration(from = 10, to = 11), AutoMigration(from = 11, to = 12),
+        AutoMigration(from = 12, to = 13), AutoMigration(from = 13, to = 14),
     ],
 )
 @ColumnTypeConverters(Converters::class)
 abstract class AerialDatabase : RoomDatabase() {
     abstract fun playlistCacheDao(): PlaylistCacheDao
+
+    abstract fun privateCacheVariantDao(): PrivateCacheVariantDao
+
+    abstract fun privateReconciliationDao(): PrivateReconciliationDao
 
     companion object {
         private const val DATABASE_NAME = "aerial_database"

@@ -10,6 +10,26 @@ import okhttp3.Request
 
 /** Read Krill's publicly visible photos. Private libraries need a separate authenticated integration. */
 internal object KrillFeed {
+    internal val privatePanelSizes =
+        setOf(
+            616 to 720,
+            617 to 720,
+            925 to 1080,
+            1233 to 1440,
+            1234 to 1440,
+            1850 to 2160,
+            807 to 720,
+            427 to 337,
+            1210 to 1080,
+            640 to 505,
+            1613 to 1440,
+            854 to 673,
+            854 to 674,
+            2420 to 2160,
+            1280 to 1010,
+        )
+    internal val privateDisplaySizes = setOf(1280 to 720, 1920 to 1080, 2560 to 1440, 3840 to 2160)
+
     @Serializable
     private data class Page(
         val data: List<Photo>,
@@ -42,7 +62,27 @@ internal object KrillFeed {
         return matches(url) && feed.scheme == source.scheme && feed.host == source.host && feed.port == source.port
     }
 
-    /** Resolve unknown dimensions at playback without cropping portrait photos. */
+    /** Request a bounded, private collage-panel crop from the authenticated frame API. */
+    fun privatePanelCrop(
+        url: String,
+        width: Int,
+        height: Int,
+        focusRevision: Long? = null,
+    ): String? {
+        if (!KrillPrivateFeed.isFrameImage(url) || (width to height) !in privatePanelSizes) return null
+        return url
+            .toHttpUrl()
+            .newBuilder()
+            .fragment(null)
+            .setQueryParameter("crop", "auto")
+            .setQueryParameter("width", width.toString())
+            .setQueryParameter("height", height.toString())
+            .apply { focusRevision?.takeIf { it > 0 }?.let { setQueryParameter("focus_revision", it.toString()) } }
+            .build()
+            .toString()
+    }
+
+    /** Resolve unknown dimensions at playback and request a crop when supported. */
     fun cropForDimensions(
         url: String,
         width: Int,
@@ -50,15 +90,13 @@ internal object KrillFeed {
         targetWidth: Int = 1920,
         targetHeight: Int = 1080,
         privateSmartCrop: Boolean = false,
+        focusRevision: Long? = null,
     ): String? {
         val image = url.toHttpUrl()
-        if (height <= 0 || width.toDouble() / height < 1.2) return null
+        if (width <= 0 || height <= 0) return null
         require(targetWidth > 0 && targetHeight > 0) { "Invalid display size" }
         if (privateSmartCrop) {
-            val sizes = setOf(1280 to 720, 1920 to 1080, 2560 to 1440, 3840 to 2160)
-            if (!KrillPrivateFeed.isFrameImage(url) || (targetWidth to targetHeight) !in sizes || width < targetWidth ||
-                height < targetHeight
-            ) {
+            if (!KrillPrivateFeed.isFrameImage(url) || (targetWidth to targetHeight) !in privateDisplaySizes) {
                 return null
             }
             if (kotlin.math.abs(width.toDouble() / height - targetWidth.toDouble() / targetHeight) < 0.01) return null
@@ -68,9 +106,11 @@ internal object KrillFeed {
                 .setQueryParameter("crop", "auto")
                 .setQueryParameter("width", targetWidth.toString())
                 .setQueryParameter("height", targetHeight.toString())
+                .apply { focusRevision?.takeIf { it > 0 }?.let { setQueryParameter("focus_revision", it.toString()) } }
                 .build()
                 .toString()
         }
+        if (width.toDouble() / height < 1.2) return null
         if (image.fragment != "frame-auto") return null
         return image
             .newBuilder()

@@ -5,6 +5,8 @@ import androidx.core.net.toUri
 import com.neilturner.aerialviews.data.AerialDatabase
 import com.neilturner.aerialviews.data.KrillCaptionUpdate
 import com.neilturner.aerialviews.data.KrillMetadataUpdate
+import com.neilturner.aerialviews.data.KrillPairUpdate
+import com.neilturner.aerialviews.data.PlaylistCacheRepository
 import com.neilturner.aerialviews.models.MediaPlaylist
 import com.neilturner.aerialviews.models.enums.AerialMediaSource
 import com.neilturner.aerialviews.models.videos.AerialMedia
@@ -123,8 +125,8 @@ internal object KrillCachedMetadataRefresh {
         }
     }
 
-    /** Bump when the caption text built from the feed changes, so upgraded devices refetch at once. */
-    internal const val CAPTION_SCHEMA = 2
+    /** Bump when the feed reconciliation changes, so upgraded devices refetch at once. */
+    internal const val CAPTION_SCHEMA = 5
 
     internal fun captionRefreshKey(
         namespace: String,
@@ -141,7 +143,20 @@ internal object KrillCachedMetadataRefresh {
         completedAt: Long,
         key: String,
         now: Long,
-    ): Boolean = completedKey == key && completedAt > 0 && now >= completedAt && now - completedAt < 24 * 60 * 60 * 1000L
+    ): Boolean = completedKey == key && completedAt > 0 && now >= completedAt && now - completedAt < 4 * 60 * 1000L
+
+    internal fun revisionStillFresh(
+        fullKey: String?,
+        fullAt: Long,
+        key: String,
+        now: Long,
+        previousRevision: String?,
+        currentRevision: String?,
+        previousVideoAvailable: String?,
+        videoAvailable: Boolean,
+    ): Boolean =
+        fullKey == key && fullAt > 0 && now >= fullAt && now - fullAt < 24 * 60 * 60 * 1000L &&
+            currentRevision != null && previousRevision == currentRevision && previousVideoAvailable == videoAvailable.toString()
 
     fun refreshCaptions(
         context: Context,
@@ -176,9 +191,47 @@ internal object KrillCachedMetadataRefresh {
                             }
                         currentCoroutineContext().ensureActive()
                         withContext(Dispatchers.Main) { if (lease.isValid()) playlist.updateCachedCaptions(cached) }
+                        if (lease.isValid()) playlist.refreshAppendedSourceSize()
                         return@withLock
                     }
-                    val result = KrillPrivateProvider(context).fetch()
+                    // Poll one media item for the library revision; avoid repeatedly fetching a large library.
+                    val client = cancellableKrillClient(job)
+                    val activeSession = KrillSessionManager(context).session(client) { job.ensureActive() } ?: return@withLock
+                    if (activeSession.cacheNamespace != session.cacheNamespace || activeSession.spaceId == null ||
+                        !lease.isValid()
+                    ) {
+                        return@withLock
+                    }
+                    val config = KrillPrivateFeed.config(client, activeSession.libraryOrigin)
+                    val feed = KrillPrivateFeed(client, activeSession.libraryOrigin, activeSession.accessToken)
+                    val revision =
+                        if (config.libraryRevisionAvailable) {
+                            feed.libraryRevision(activeSession.spaceId) ?: return@withLock
+                        } else {
+                            null
+                        }
+                    val now = System.currentTimeMillis()
+                    if (revisionStillFresh(
+                            prefs.getString("full_key", null),
+                            prefs.getLong("full_at", 0L),
+                            key,
+                            now,
+                            prefs.getString("revision", null),
+                            revision,
+                            prefs.getString("video_available", null),
+                            config.videoAvailable,
+                        )
+                    ) {
+                        if (lease.isValid()) playlist.refreshAppendedSourceSize()
+                        prefs
+                            .edit()
+                            .putString("completed", key)
+                            .putLong("completed_at", now)
+                            .apply()
+                        return@withLock
+                    }
+                    val snapshot = KrillPrivateProvider(context).fetchWithEvidence()
+                    val result = snapshot.result
                     currentCoroutineContext().ensureActive()
                     if (!lease.isValid() ||
                         KrillSessionManager(context).cachedSession()?.cacheNamespace != session.cacheNamespace
@@ -186,6 +239,34 @@ internal object KrillCachedMetadataRefresh {
                         return@withLock
                     }
                     if (result !is ProviderFetchResult.Success) return@withLock
+                    val evidence = snapshot.evidence ?: return@withLock
+                    if (evidence.namespace != session.cacheNamespace || evidence.videoAvailable != config.videoAvailable ||
+                        evidence.revision != revision
+                    ) {
+                        return@withLock
+                    }
+                    if (KrillPrivateFeed.config(client, activeSession.libraryOrigin).videoAvailable !=
+                        config.videoAvailable
+                    ) {
+                        return@withLock
+                    }
+                    // Do not label a mixed snapshot fresh if the library changed during the fetch.
+                    if (revision != null && feed.libraryRevision(activeSession.spaceId) != revision) return@withLock
+                    val selectedMedia =
+                        result.media.filter {
+                            val uri = it.uri.toString()
+                            it.source == AerialMediaSource.KRILL &&
+                                (
+                                    KrillPrivateFeed.isSelectedImage(uri, session.libraryOrigin, session.spaceId) ||
+                                        KrillPrivateFeed.isSelectedVideo(uri, session.libraryOrigin, session.spaceId)
+                                )
+                        }
+                    PlaylistCacheRepository(context, dao).appendKrillMedia(state, selectedMedia) ?: return@withLock
+                    currentCoroutineContext().ensureActive()
+                    if (!lease.isValid() || KrillSessionManager(context).cachedSession()?.cacheNamespace != session.cacheNamespace) {
+                        return@withLock
+                    }
+                    playlist.refreshAppendedSourceSize()
                     val captions = result.media.associate { it.uri.toString() to it.metadata.shortDescription }
                     val updates =
                         dao.getKrillCaptions().mapNotNull { cached ->
@@ -193,16 +274,38 @@ internal object KrillCachedMetadataRefresh {
                             if (caption == cached.shortDescription) null else KrillCaptionUpdate(cached.uri, caption)
                         }
                     if (!dao.updateKrillCaptions(state.cachedAt, updates)) return@withLock
+                    val pairUpdates =
+                        result.media.map {
+                            KrillPairUpdate(
+                                it.uri.toString(),
+                                it.metadata.pairPartner,
+                                it.metadata.pairThird,
+                                it.metadata.focusRevision,
+                                it.metadata.focusX,
+                                it.metadata.focusY,
+                            )
+                        }
+                    val pairsChanged = dao.updateKrillPairs(state.cachedAt, pairUpdates) ?: return@withLock
+                    if (pairsChanged > 0) KrillPortraitHistory(context).invalidateCadence(session.cacheNamespace)
                     currentCoroutineContext().ensureActive()
                     if (!lease.isValid()) return@withLock
-                    withContext(Dispatchers.Main) { if (lease.isValid()) playlist.updateCachedCaptions(result.media) }
+                    withContext(Dispatchers.Main) {
+                        if (lease.isValid()) {
+                            playlist.updateCachedCaptions(result.media)
+                            playlist.updateCachedPairing(result.media)
+                        }
+                    }
                     if (lease.isValid()) {
                         prefs
                             .edit()
                             .putString(
                                 "completed",
                                 key,
-                            ).putLong("completed_at", System.currentTimeMillis())
+                            ).putLong("completed_at", now)
+                            .putString("full_key", key)
+                            .putLong("full_at", now)
+                            .putString("revision", revision)
+                            .putString("video_available", config.videoAvailable.toString())
                             .apply()
                     }
                 } catch (cancelled: CancellationException) {

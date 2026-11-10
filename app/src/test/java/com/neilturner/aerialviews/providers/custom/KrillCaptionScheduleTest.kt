@@ -12,22 +12,22 @@ import org.junit.jupiter.api.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class KrillCaptionScheduleTest {
     @Test
-    fun `checks hourly until the screen is stopped`() =
+    fun `checks every minute until the screen is stopped`() =
         runTest {
             var checks = 0
             val schedule = launch { runKrillCaptionSchedule { checks++ } }
             runCurrent()
-            advanceTimeBy(60 * 60 * 1000L - 1)
+            advanceTimeBy(60 * 1000L - 1)
             runCurrent()
             assertEquals(0, checks)
             advanceTimeBy(1)
             runCurrent()
             assertEquals(1, checks)
-            advanceTimeBy(60 * 60 * 1000L)
+            advanceTimeBy(60 * 1000L)
             runCurrent()
             assertEquals(2, checks)
             schedule.cancelAndJoin()
-            advanceTimeBy(60 * 60 * 1000L)
+            advanceTimeBy(60 * 1000L)
             runCurrent()
             assertEquals(2, checks)
         }

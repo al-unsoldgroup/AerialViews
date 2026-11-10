@@ -11,6 +11,7 @@ internal object KrillPortraitPairing {
         val height: Int?,
         /** Krill media ID of the server-chosen partner. */
         val partner: String? = null,
+        val thirdPartner: String? = null,
     ) {
         val mediaId: String? by lazy { mediaIdOf(id) }
     }
@@ -24,6 +25,17 @@ internal object KrillPortraitPairing {
     ): Boolean =
         first.partner != null && first.partner == second.mediaId && second.partner == first.mediaId &&
             eligible(first, panelWidth, panelHeight) && eligible(second, panelWidth, panelHeight)
+
+    fun isTriple(
+        first: Photo,
+        second: Photo,
+        third: Photo,
+        panelWidth: Int,
+        panelHeight: Int,
+    ): Boolean =
+        isPair(first, second, panelWidth, panelHeight) && first.thirdPartner != null &&
+            first.thirdPartner == second.thirdPartner && first.thirdPartner == third.mediaId &&
+            third.mediaId != first.mediaId && third.mediaId != second.mediaId && eligible(third, panelWidth, panelHeight)
 
     /** Media ID from a frame image URL, `/api/frame/media/<id>/image?space=...`, without a full URL parse. */
     internal fun mediaIdOf(uri: String): String? {

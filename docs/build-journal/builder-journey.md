@@ -455,6 +455,18 @@ With Al's approval, we deployed this to Footage Rodeo on 5 November. We took a D
 
 For the direct path, an iOS Shortcut in the Photos share sheet posts each original file to a new Krill endpoint, authenticated by a revocable per-device token. No native app or Mac build is required. iOS removes GPS before sharing unless the share sheet's Options → Location setting is on. The endpoint stores the original bytes unchanged, so a shared photo enters the same caption-enrichment queue, and the next cron adds its place and capture time. A test with a synthetic GPS-tagged JPEG confirms both steps. The work is in [Krill PR #57](https://github.com/al-unsoldgroup/krill-photo-library/pull/57). A real iPhone share is still untested.
 
+### Cache upgrade device check (10 November)
+
+The current beta debug APK installed over the previous debug build without clearing app data. After the TV woke, it displayed a photo across the full screen; a sampled log contained no fatal app exception. This checks that the upgraded app can resume photo playback on this device. It does not establish that every cached item survived, that the new inventory recorded all variants, or that deletion and offline recovery work. Those checks remain open.
+
+### Fill and recovery groundwork (UNS-1754, 10 November)
+
+The in-flight frame work from 9 and 10 November landed on the integration branch. Private single photos fill the 16:9 screen. They use the Cloudflare display-size crop when it is available, and otherwise a local crop around the photo's focal point. A photo shown alone falls back to fit plus a blurred backdrop only when its known source is smaller than the screen in either dimension, so filling would enlarge it. Two-photo collages fill the screen edge to edge. Each panel is cropped around its focal point, and the only black is the approved divider of about 70 pixels at 1080p. Three-photo layouts use the same rule.
+
+The library reconciliation groundwork is included but not switched on. It has a private cache variant inventory, a durable cleanup journal with a copy manifest, a stage executor, detached-cache cleanup on sign-out and Room schemas 7 to 14. The executor now also finishes a purged journal: it records the new generation, switches to the verified cache, removes the journal and reopens private loading. Each step can be repeated after an interruption. While a journal exists, the playlist will not load the private library. Nothing creates a journal yet. Startup recovery has to run before the screen is built, which changes the screensaver start-up and needs proof on the TV. Both remain open; see `frame-reconciliation-design.md`.
+
+The full unit suite passed (695 tests in 113 suites), as did the formatting check and `assembleBetaDebug`. A pre-existing race in a lock test was fixed by waiting for the cancelled job before checking it. Nothing was installed on the TV in this step.
+
 ## Next experiments
 
 1. Finish reviewing the Krill integration and artwork import, then verify its authorized deployment and private image delivery.

@@ -18,6 +18,15 @@ data class KrillCaptionUpdate(
     val caption: String,
 )
 
+data class KrillPairUpdate(
+    val uri: String,
+    val partner: String?,
+    val third: String?,
+    val focusRevision: Long? = null,
+    val focusX: Float? = null,
+    val focusY: Float? = null,
+)
+
 data class KrillCachedCaption(
     val uri: String,
     val shortDescription: String,
@@ -36,6 +45,7 @@ data class PortraitPlanRow(
     val tagsJson: String?,
     val pairedWithNext: Boolean?,
     val pairPartner: String?,
+    val pairThird: String?,
 )
 
 @Dao
@@ -55,8 +65,35 @@ interface PlaylistCacheDao {
     @Query("SELECT * FROM cached_media ORDER BY playlistOrder ASC")
     suspend fun getAllMediaItemsOrdered(): List<CachedMediaEntity>
 
+    @Query("SELECT uri FROM cached_media WHERE source = 'KRILL'")
+    suspend fun getKrillUris(): List<String>
+
+    @Query("SELECT COALESCE(MAX(playlistOrder), -1) FROM cached_media")
+    suspend fun lastMediaOrder(): Int
+
+    @Query("UPDATE playlist_state SET totalMediaItems = totalMediaItems + :count WHERE id = 1")
+    suspend fun incrementMediaTotal(count: Int)
+
+    /** Append without reordering a running playlist; reject a replacement cache. */
+    @Transaction
+    suspend fun appendKrillItems(
+        cachedAt: Long,
+        settingsHash: String,
+        items: List<CachedMediaEntity>,
+    ): Int? {
+        val state = getPlaylistState() ?: return null
+        if (state.cachedAt != cachedAt || state.settingsHash != settingsHash) return null
+        val known = getKrillUris().toMutableSet()
+        val added = items.filter { it.source == "KRILL" && known.add(it.uri) }
+        if (added.isEmpty()) return 0
+        val start = lastMediaOrder() + 1
+        insertMediaItems(added.mapIndexed { index, item -> item.copy(id = 0, playlistOrder = start + index) })
+        incrementMediaTotal(added.size)
+        return added.size
+    }
+
     @Query(
-        "SELECT id, playlistOrder, uri, type, source, timeOfDay, albumName, width, height, tagsJson, pairedWithNext, pairPartner FROM cached_media ORDER BY playlistOrder ASC",
+        "SELECT id, playlistOrder, uri, type, source, timeOfDay, albumName, width, height, tagsJson, pairedWithNext, pairPartner, pairThird FROM cached_media ORDER BY playlistOrder ASC",
     )
     suspend fun getPortraitPlanRows(): List<PortraitPlanRow>
 
@@ -103,6 +140,17 @@ interface PlaylistCacheDao {
      */
     @Query("SELECT COUNT(*) FROM cached_media WHERE (type != 'VIDEO' OR timeOfDay IN (:allowed))")
     suspend fun countMediaItems(allowed: List<String>): Int
+
+    @Transaction
+    suspend fun countCurrentMedia(
+        cachedAt: Long,
+        settingsHash: String,
+        allowed: List<String>,
+    ): Int? {
+        val state = getPlaylistState() ?: return null
+        if (state.cachedAt != cachedAt || state.settingsHash != settingsHash) return null
+        return countMediaItems(allowed)
+    }
 
     /** Counts matching videos, used to decide whether the filter should fall back to everything. */
     @Query("SELECT COUNT(*) FROM cached_media WHERE type = 'VIDEO' AND timeOfDay IN (:allowed)")
@@ -174,6 +222,33 @@ interface PlaylistCacheDao {
         uri: String,
         caption: String,
     )
+
+    @Query(
+        "UPDATE cached_media SET pairPartner = :partner, pairThird = :third, focusRevision = :focusRevision, " +
+            "focusX = :focusX, focusY = :focusY " +
+            "WHERE source = 'KRILL' AND uri = :uri AND " +
+            "(pairPartner IS NOT :partner OR pairThird IS NOT :third OR focusRevision IS NOT :focusRevision " +
+            "OR focusX IS NOT :focusX OR focusY IS NOT :focusY)",
+    )
+    suspend fun updateKrillPair(
+        uri: String,
+        partner: String?,
+        third: String?,
+        focusRevision: Long?,
+        focusX: Float?,
+        focusY: Float?,
+    ): Int
+
+    @Transaction
+    suspend fun updateKrillPairs(
+        cachedAt: Long,
+        items: List<KrillPairUpdate>,
+    ): Int? {
+        if (getPlaylistState()?.cachedAt != cachedAt) return null
+        var changed = 0
+        for (item in items) changed += updateKrillPair(item.uri, item.partner, item.third, item.focusRevision, item.focusX, item.focusY)
+        return changed
+    }
 
     @Query("SELECT uri, shortDescription FROM cached_media WHERE source = 'KRILL'")
     suspend fun getKrillCaptions(): List<KrillCachedCaption>

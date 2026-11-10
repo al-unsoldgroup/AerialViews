@@ -74,7 +74,7 @@ internal class MediaServiceTest {
                 every { session.cacheNamespace } returns "fallback-test"
                 every { session.spaceId } returns "mine"
                 every { session.libraryOrigin } returns "https://library.example"
-                every { KrillFrameCache.cleanupPending(any()) } returns false
+                every { KrillFrameCache.privatePlaybackBlocked(any()) } returns false
                 val krill = mockk<KrillPrivateProvider>(relaxed = true)
                 every { krill.enabled } returns false
                 every { krill.type } returns ProviderSourceType.REMOTE

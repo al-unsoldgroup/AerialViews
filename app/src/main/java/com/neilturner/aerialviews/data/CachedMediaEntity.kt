@@ -32,4 +32,8 @@ data class CachedMediaEntity(
     val tagsJson: String? = null,
     val pairedWithNext: Boolean? = null,
     val pairPartner: String? = null,
+    val pairThird: String? = null,
+    val focusRevision: Long? = null,
+    val focusX: Float? = null,
+    val focusY: Float? = null,
 )

@@ -15,6 +15,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -31,6 +32,52 @@ internal class PlaylistCacheDaoTest {
     private val dayAllowed = TimeOfDayFilter.forPeriod(TimeOfDay.DAY, emptySet(), emptySet()).allowedNames()
     private val dayWithSunrise = TimeOfDayFilter.forPeriod(TimeOfDay.DAY, setOf("SUNRISE"), emptySet()).allowedNames()
     private val nightAllowed = TimeOfDayFilter.forPeriod(TimeOfDay.NIGHT, emptySet(), emptySet()).allowedNames()
+
+    @Test
+    fun `appending krill media preserves order and rejects stale cache identity`() =
+        runTest {
+            val first = photo(0).copy(source = "KRILL", uri = "https://example.test/first")
+            val other = photo(1)
+            val fresh = photo(0).copy(source = "KRILL", uri = "https://example.test/new")
+            val saved = state(2).copy(mediaPosition = 1)
+            dao.updateCache(listOf(first, other), emptyList(), saved)
+            assertNull(dao.appendKrillItems(saved.cachedAt, "wrong", listOf(fresh)))
+            assertNull(dao.appendKrillItems(saved.cachedAt + 1, saved.settingsHash, listOf(fresh)))
+            assertEquals(1, dao.appendKrillItems(saved.cachedAt, saved.settingsHash, listOf(first, fresh, fresh)))
+            assertEquals(listOf(first.uri, other.uri, fresh.uri), dao.getAllMediaItemsOrdered().map { it.uri })
+            assertEquals(3, dao.getPlaylistState()?.totalMediaItems)
+            assertEquals(1, dao.getPlaylistState()?.mediaPosition)
+            assertEquals(0, dao.appendKrillItems(saved.cachedAt, saved.settingsHash, listOf(fresh)))
+            assertEquals(3, dao.countCurrentMedia(saved.cachedAt, saved.settingsHash, dayAllowed))
+            assertNull(dao.countCurrentMedia(saved.cachedAt, "wrong", dayAllowed))
+        }
+
+    @Test
+    fun `upgrades an existing cached rotation to the new collage cadence`() =
+        runTest {
+            val context = mockk<Context>()
+            val preferences = mockk<SharedPreferences>(relaxed = true)
+            every { context.applicationContext } returns context
+            every { context.getSharedPreferences(any(), any()) } returns preferences
+            val repository = PlaylistCacheRepository(context, dao, { PlaylistCachePrefs(true, "-1", false) })
+            val rows =
+                (0 until 6).flatMap { i ->
+                    listOf("a$i" to "b$i", "b$i" to "a$i").mapIndexed { j, (id, partner) ->
+                        photo(2 * i + j).copy(
+                            source = "KRILL",
+                            uri = "https://photos.example/api/frame/media/$id/image?space=mine",
+                            width = 1200,
+                            height = 1800,
+                            tagsJson = "[]",
+                            pairPartner = partner,
+                            pairedWithNext = j == 0,
+                        )
+                    }
+                }
+            dao.updateCache(rows, emptyList(), state(rows.size).copy(mediaPosition = -1))
+            assertTrue(repository.preparePortraitPlan("https://photos.example", "mine", "session", TimeOfDayFilter.ALL, 960, 1080))
+            assertEquals(listOf(0, 6), dao.getAllMediaItemsOrdered().filter { it.pairedWithNext == true }.map { it.playlistOrder })
+        }
 
     @BeforeEach
     fun setUp() {
@@ -129,6 +176,56 @@ internal class PlaylistCacheDaoTest {
         }
 
     @Test
+    fun `portrait planning keeps all three members of the current collage in place`() =
+        runTest {
+            val context = mockk<Context>()
+            every { context.applicationContext } returns context
+            every { context.getSharedPreferences(any(), any()) } returns mockk<SharedPreferences>(relaxed = true)
+            val repository = PlaylistCacheRepository(context, dao, { PlaylistCachePrefs(true, "-1", false) })
+
+            fun privatePhoto(
+                order: Int,
+                id: String,
+            ) = photo(order).copy(
+                source = "KRILL",
+                uri = "https://photos.example/api/frame/media/$id/image?space=mine",
+                width = 1600,
+                height = 1800,
+                tagsJson = "[]",
+            )
+            val rows =
+                listOf(
+                    privatePhoto(0, "a").copy(pairedWithNext = true, pairPartner = "b", pairThird = "c"),
+                    privatePhoto(1, "b").copy(pairPartner = "a", pairThird = "c"),
+                    privatePhoto(2, "c").copy(pairPartner = "d"),
+                    privatePhoto(3, "d").copy(pairPartner = "c"),
+                    privatePhoto(4, "e"),
+                )
+            dao.updateCache(rows, emptyList(), state(rows.size).copy(mediaPosition = 0))
+            assertTrue(repository.preparePortraitPlan("https://photos.example", "mine", "session", TimeOfDayFilter.ALL, 960, 1080))
+            assertEquals(
+                listOf("a", "b", "c"),
+                dao.getAllMediaItemsOrdered().take(3).map { it.uri.substringAfter("media/").substringBefore("/") },
+            )
+        }
+
+    @Test
+    fun `pair refresh upgrades old cached rows without reordering or overwriting a replacement cache`() =
+        runTest {
+            val old = photo(0).copy(source = "KRILL", pairPartner = "b", pairedWithNext = true)
+            val state = state(1)
+            dao.updateCache(listOf(old), emptyList(), state)
+            assertEquals(1, dao.updateKrillPairs(state.cachedAt, listOf(KrillPairUpdate(old.uri, "b", "c"))))
+            assertEquals("c", dao.getAllMediaItemsOrdered().single().pairThird)
+            assertEquals(true, dao.getAllMediaItemsOrdered().single().pairedWithNext)
+            assertEquals(0, dao.updateKrillPairs(state.cachedAt, listOf(KrillPairUpdate(old.uri, "b", "c"))))
+            dao.clearState()
+            dao.insertOrUpdateState(state.copy(cachedAt = state.cachedAt + 1))
+            assertNull(dao.updateKrillPairs(state.cachedAt, listOf(KrillPairUpdate(old.uri, null, null))))
+            assertEquals("c", dao.getAllMediaItemsOrdered().single().pairThird)
+        }
+
+    @Test
     fun `caption refresh preserves rotation and ignores a replaced cache`() =
         runTest {
             val image = photo(0).copy(source = "KRILL", shortDescription = "Old")
@@ -170,6 +267,7 @@ internal class PlaylistCacheDaoTest {
             val preferences = mockk<SharedPreferences>(relaxed = true)
             every { context.applicationContext } returns context
             every { context.getSharedPreferences(any(), any()) } returns preferences
+            every { preferences.getBoolean(match { it.startsWith("cadence-v2:") }, false) } returnsMany listOf(false, true, true)
             every { preferences.contains(any()) } returns true
             every { preferences.getLong(any(), any()) } answers { System.currentTimeMillis() - 1000 }
             every { preferences.getLong(match { it.startsWith("timeout:") }, any()) } returns 0L

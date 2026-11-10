@@ -10,10 +10,39 @@ class KrillPortraitRotationTest {
         partner: String? = null,
         width: Int = 1200,
         height: Int = 1800,
+        third: String? = null,
     ) = KrillPortraitRotation.Item(
         id,
-        KrillPortraitPairing.Photo("https://photos.example/api/frame/media/$id/image?space=mine", width, height, partner),
+        KrillPortraitPairing.Photo("https://photos.example/api/frame/media/$id/image?space=mine", width, height, partner, third),
     )
+
+    @Test
+    fun `a mutually nominated third photo follows the pair without losing intervening slides`() {
+        val items = listOf(photo("a", "b", width = 1500, third = "c"), photo("x"), photo("b", "a", third = "c"), photo("c"))
+        val plan = KrillPortraitRotation.arrange(items, -1, 960, 1080)
+        assertEquals(listOf("a", "b", "c", "x"), plan.items.map { it.identity })
+        assertEquals(setOf(0), plan.tripleStarts)
+        val tooSmall = listOf(photo("a", "b", third = "c"), photo("b", "a", third = "c"), photo("c"))
+        assertEquals(emptySet<Int>(), KrillPortraitRotation.arrange(tooSmall, -1, 960, 1080).tripleStarts)
+        val disagreement = listOf(photo("a", "b", third = "c"), photo("b", "a"), photo("c"))
+        assertEquals(emptySet<Int>(), KrillPortraitRotation.arrange(disagreement, -1, 960, 1080).tripleStarts)
+    }
+
+    @Test
+    fun `collages appear no more than once in five slides`() {
+        val items = (0 until 12).flatMap { i -> listOf(photo("a$i", "b$i"), photo("b$i", "a$i")) }
+        val plan = KrillPortraitRotation.arrange(items, -1, 960, 1080, collageEvery = 5)
+        assertEquals(setOf(0, 6, 12, 18), plan.pairStarts)
+        assertEquals(items.map { it.identity }.toSet(), plan.items.map { it.identity }.toSet())
+    }
+
+    @Test
+    fun `a small looping library remains dominated by singles`() {
+        val items = listOf(photo("a", "b"), photo("b", "a"), photo("c", "d"), photo("d", "c"))
+        val plan = KrillPortraitRotation.arrange(items, -1, 960, 1080, collageEvery = 5)
+        assertEquals(emptySet<Int>(), plan.pairStarts)
+        assertEquals(items, plan.items)
+    }
 
     @Test
     fun `moves the server partner next to its photo without dropping intervening items`() {

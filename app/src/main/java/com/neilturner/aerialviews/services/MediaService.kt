@@ -148,7 +148,7 @@ class MediaService internal constructor(
         withContext(Dispatchers.IO) {
             val privateSession =
                 if (providers.any { it is KrillPrivateProvider }) privateSessionProvider() else null
-            if (providers.any { it is KrillPrivateProvider } && KrillFrameCache.cleanupPending(context)) {
+            if (providers.any { it is KrillPrivateProvider } && KrillFrameCache.privatePlaybackBlocked(context)) {
                 throw CancellationException("Krill cleanup is pending")
             }
             val privateLease =

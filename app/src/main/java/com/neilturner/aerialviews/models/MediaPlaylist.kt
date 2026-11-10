@@ -30,6 +30,7 @@ class MediaPlaylist(
     size: Int = initialVideos.size,
     private var windowOffset: Int = 0,
     private val fetchChunk: (suspend (offset: Int, limit: Int) -> List<AerialMedia>)? = null,
+    private val countSource: (suspend () -> Int?)? = null,
 ) {
     private var position = startPosition
 
@@ -61,6 +62,35 @@ class MediaPlaylist(
     }
 
     val size: Int get() = servableSize
+
+    /** Publish an appended source size without moving the current cursor or reviving stale refills. */
+    suspend fun refreshAppendedSourceSize() {
+        val count = countSource?.invoke() ?: return
+        synchronized(windowLock) {
+            if (count > servableSize) {
+                refillGeneration++
+                metadataRevision++
+                servableSize = count
+            }
+        }
+    }
+
+    /** Append already-authorized media to an in-memory rotation. */
+    fun appendUncachedKrillMedia(fresh: List<AerialMedia>) {
+        synchronized(windowLock) {
+            if (fetchChunk != null) return
+            val known = windowVideos.mapTo(mutableSetOf()) { it.uri.toString() }
+            val added =
+                fresh.filter {
+                    it.source == com.neilturner.aerialviews.models.enums.AerialMediaSource.KRILL && known.add(it.uri.toString())
+                }
+            if (added.isNotEmpty()) {
+                windowVideos.addAll(added)
+                servableSize = windowVideos.size
+                metadataRevision++
+            }
+        }
+    }
 
     internal fun restoreCursor(position: Int): Boolean {
         if (position !in -1 until servableSize) return false
@@ -117,6 +147,22 @@ class MediaPlaylist(
                 if (cached.source == com.neilturner.aerialviews.models.enums.AerialMediaSource.KRILL) {
                     captions[cached.uri.toString()]?.let { cached.metadata.shortDescription = it }
                 }
+            }
+        }
+    }
+
+    fun updateCachedPairing(fresh: List<AerialMedia>) {
+        val byUri = fresh.associateBy { it.uri.toString() }
+        synchronized(windowLock) {
+            refillGeneration++
+            windowVideos.forEach { cached ->
+                val updated = byUri[cached.uri.toString()] ?: return@forEach
+                if (cached.source != com.neilturner.aerialviews.models.enums.AerialMediaSource.KRILL) return@forEach
+                cached.metadata.pairPartner = updated.metadata.pairPartner
+                cached.metadata.pairThird = updated.metadata.pairThird
+                cached.metadata.focusRevision = updated.metadata.focusRevision
+                cached.metadata.focusX = updated.metadata.focusX
+                cached.metadata.focusY = updated.metadata.focusY
             }
         }
     }
