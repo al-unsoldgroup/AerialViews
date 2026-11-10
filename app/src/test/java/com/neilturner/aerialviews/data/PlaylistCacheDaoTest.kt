@@ -226,6 +226,22 @@ internal class PlaylistCacheDaoTest {
         }
 
     @Test
+    fun `pair refresh adds and removes the art tag on an already cached row`() =
+        runTest {
+            val old = photo(0).copy(source = "KRILL", tagsJson = "[\"trip\"]")
+            val state = state(1)
+            dao.updateCache(listOf(old), emptyList(), state)
+            val marked = KrillPairUpdate(old.uri, null, null, tagsJson = "[\"trip\",\"art\"]")
+            assertEquals(1, dao.updateKrillPairs(state.cachedAt, listOf(marked)))
+            assertEquals("[\"trip\",\"art\"]", dao.getAllMediaItemsOrdered().single().tagsJson)
+            assertEquals(0, dao.updateKrillPairs(state.cachedAt, listOf(marked)))
+            assertEquals(0, dao.updateKrillPairs(state.cachedAt, listOf(KrillPairUpdate(old.uri, null, null))))
+            assertEquals("[\"trip\",\"art\"]", dao.getAllMediaItemsOrdered().single().tagsJson)
+            assertEquals(1, dao.updateKrillPairs(state.cachedAt, listOf(marked.copy(tagsJson = "[\"trip\"]"))))
+            assertEquals("[\"trip\"]", dao.getAllMediaItemsOrdered().single().tagsJson)
+        }
+
+    @Test
     fun `caption refresh preserves rotation and ignores a replaced cache`() =
         runTest {
             val image = photo(0).copy(source = "KRILL", shortDescription = "Old")

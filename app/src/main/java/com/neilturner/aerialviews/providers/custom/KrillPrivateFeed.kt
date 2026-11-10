@@ -275,6 +275,8 @@ internal class KrillPrivateFeed(
         @SerialName("captured_local") val capturedLocal: String? = null,
         @SerialName("artwork_title") val artworkTitle: String? = null,
         @SerialName("artwork_artist") val artworkArtist: String? = null,
+        // UNS-1750: Krill marks personal art explicitly; the frame classifies it through the art tag.
+        val category: String? = null,
         val pair: ServerPair? = null,
         @SerialName("focus_revision") val focusRevision: Long? = null,
         @SerialName("frame_focus") val frameFocus: FocusPoint? = null,
@@ -558,7 +560,7 @@ internal class KrillPrivateFeed(
                         ) ?: KrillCaption.cleanLegacy(listOfNotNull(photo.title, photo.credit, photo.description).joinToString(" • ")),
                         photo.width,
                         photo.height,
-                        photo.tags,
+                        if (photo.category == "art" && "art" !in photo.tags) photo.tags + "art" else photo.tags,
                         video,
                         photo.pair?.partnerId?.takeIf { !video && it.isNotBlank() },
                         photo.pair?.thirdId?.takeIf { !video && it.isNotBlank() },

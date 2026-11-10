@@ -80,6 +80,9 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.milliseconds
 
+/** Dark neutral matte behind uncropped art; dim enough for a living room at night. */
+private const val ART_MATTE = 0xFF262624.toInt()
+
 class ImagePlayerView : FrameLayout {
     constructor(context: Context) : super(context)
     constructor(context: Context, attrs: AttributeSet?) : super(context, attrs)
@@ -287,18 +290,22 @@ class ImagePlayerView : FrameLayout {
                             if (generation == preloadGeneration && (access?.second?.isValid() != false)) {
                                 Timber.d("Krill image preload completed")
                                 val cropUrl =
-                                    runCatching {
-                                        val (targetWidth, targetHeight) = resolveTargetSize()
-                                        KrillFeed.cropForDimensions(
-                                            media.uri.toString(),
-                                            media.metadata.width ?: result.image.width,
-                                            media.metadata.height ?: result.image.height,
-                                            targetWidth,
-                                            targetHeight,
-                                            privateSmartCrop = isPrivateCropEnabled(media),
-                                            focusRevision = media.metadata.focusRevision,
-                                        )
-                                    }.getOrNull()
+                                    if (fitsArt(media)) {
+                                        null
+                                    } else {
+                                        runCatching {
+                                            val (targetWidth, targetHeight) = resolveTargetSize()
+                                            KrillFeed.cropForDimensions(
+                                                media.uri.toString(),
+                                                media.metadata.width ?: result.image.width,
+                                                media.metadata.height ?: result.image.height,
+                                                targetWidth,
+                                                targetHeight,
+                                                privateSmartCrop = isPrivateCropEnabled(media),
+                                                focusRevision = media.metadata.focusRevision,
+                                            )
+                                        }.getOrNull()
+                                    }
                                 if (cropUrl != null) {
                                     val cropAccess = if (access != null) acquirePrivateAccess(media, cropUrl) else null
                                     if (access == null || cropAccess != null) {
@@ -691,6 +698,7 @@ class ImagePlayerView : FrameLayout {
                             if (third != null && pair.size > 2) focus(third, pair[2].second) else null,
                         )
                     blurHelper.update(null)
+                    background = null
                     foregroundIsPrivate = true
                     foregroundImageView.scaleType = ImageView.ScaleType.FIT_XY
                     setForegroundDrawable(drawable)
@@ -926,6 +934,7 @@ class ImagePlayerView : FrameLayout {
                             if (generation == imageGeneration && (access?.second?.isValid() != false)) {
                                 val drawable = image.asDrawable(resources)
                                 blurHelper.update(drawable.takeIf { shouldShowBlurBackground(media, it) })
+                                if (fitsArt(media)) setBackgroundColor(ART_MATTE) else background = null
                                 foregroundIsPrivate = isPrivateKrillImage(media)
                                 setForegroundDrawable(drawable)
                                 setScaleMode(image.width, image.height, media, cropFallback)
@@ -938,7 +947,7 @@ class ImagePlayerView : FrameLayout {
                                 Timber.d("Krill image loaded from ${result.dataSource}")
                             }
                             setScaleMode(result.image.width, result.image.height, media, cropFallback)
-                            if (media.source == AerialMediaSource.KRILL && !cropFallback) {
+                            if (media.source == AerialMediaSource.KRILL && !cropFallback && !fitsArt(media)) {
                                 val cropUrl =
                                     runCatching {
                                         KrillFeed.cropForDimensions(
@@ -1030,7 +1039,12 @@ class ImagePlayerView : FrameLayout {
     private fun shouldSkipBlurBackground(
         media: AerialMedia,
         drawable: Drawable,
-    ): Boolean = media.uri.filename.endsWith(".gif", ignoreCase = true) || drawable is Animatable
+    ): Boolean = media.uri.filename.endsWith(".gif", ignoreCase = true) || drawable is Animatable || fitsArt(media)
+
+    /** Personal art without a manual crop point is shown whole on a neutral matte (UNS-1750). */
+    private fun fitsArt(media: AerialMedia): Boolean =
+        isPrivateKrillImage(media) &&
+            FrameModePolicy.fitsArt(media.metadata.tags, media.metadata.tagsKnown, media.metadata.focusX, media.metadata.focusY)
 
     private fun shouldShowBlurBackground(
         media: AerialMedia,
@@ -1154,6 +1168,11 @@ class ImagePlayerView : FrameLayout {
         media: AerialMedia,
         alreadyCropped: Boolean,
     ) {
+        if (fitsArt(media)) {
+            activeFocus = null
+            foregroundImageView.scaleType = ImageView.ScaleType.FIT_CENTER
+            return
+        }
         if (isPrivateKrillImage(media) && !alreadyCropped) {
             // Fill the screen unless the known source would have to be enlarged; then fit it over the blurred backdrop.
             val (screenWidth, screenHeight) = resolveTargetSize()

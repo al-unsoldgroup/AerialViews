@@ -467,6 +467,22 @@ The library reconciliation groundwork is included but not switched on. It has a 
 
 The full unit suite passed (695 tests in 113 suites), as did the formatting check and `assembleBetaDebug`. A pre-existing race in a lock test was fixed by waiting for the cancelled job before checking it. Nothing was installed on the TV in this step.
 
+### Device gaps (UNS-1749, 10 November)
+
+The TV photo menu no longer carries the dead permanent-delete rows, confirmation and strings. Deletion is phone-only; the TV offers remove from this frame, restore removed photos and reset collage choices, and the saved pending-deletion recovery is unchanged. Code review found the other gaps already in place: mixed mode defaults to 30 percent art; the cached playlist merges new Krill items every minute check through the revision-gated caption refresh, and an in-memory playlist does the same every four minutes, so `playlist_cache_refresh` set to never does not stop new media; private videos start muted, short clips loop until the slide time, and the video menu unmutes.
+
+New: an "Offline" label appears in the corner after 15 seconds without validated internet and clears on reconnect. While offline the scheduled dashboard is not opened (playback continues from cache), and on reconnect a failed dashboard retries at once instead of after its 60 second backoff. Four unit tests cover the grace period, blip, and reconnect logic. The device behaviour is not yet verified.
+
+### Personal art in Art and Mixed modes (UNS-1750, 10 November)
+
+Personal art is a photo Al marks as art in Krill, on one item or on a multi-select. The mark is the existing `art` tag. A title and artist typed by hand are stored in the caption fields from migration 052 as verified, with source `manual`, and caption enrichment no longer overwrites them. The frame feed now also sends `category: "art"`. New Krill migration 058 bumps the library revision when the art tag or the artwork caption changes, so the TV picks up the change instead of waiting up to a day.
+
+On the frame, an item tagged or categorised as art populates the ART category, so Art mode joins the mode cycle and Mixed mode uses it at the existing 30 percent default. Art without a manual crop point is shown whole: fit to the screen on a dark neutral matte, with no server crop, no focal crop and no blurred backdrop. When Al sets a crop point with the existing focus editor, art is cropped around it like a photo. Art is never placed in a collage. The caption shows title and artist, or the artist alone.
+
+This follows the task decision for this milestone (uncropped by default) rather than the plan's earlier "art fills the screen by default" line. The full unit suite, the formatting check and `assembleBetaDebug` passed. Nothing was installed on the TV in this step.
+
+Review fix, 10 November: marking or unmarking art after an item was already cached did not reach the frame. The full refresh wrote captions and pairing but never rewrote tags on existing cached rows, so the item stayed a photo until the cache was rebuilt. The pairing refresh now carries the feed tags into the cached row and the in-memory item, and rebuilds the mode index when they change. New tests add and remove the art tag on a cached row and on a window item. Full unit suite: 698 tests, 0 failures; formatting check and `assembleBetaDebug` passed.
+
 ### Release plumbing and community guide (UNS-1751, 10 November)
 
 Goal: let someone else build the same frame. Added `docs/community-guide.md` (hardware, wireless-debugging install, sign-in, sources, schedule, modes, captions, collages, iPhone share sheet, troubleshooting) and `docs/release-checklist.md` (versioning, signing files and secrets, on-device checklist, GitHub release, rollback), plus a draft epic PR description in `release-pr-draft.md`.

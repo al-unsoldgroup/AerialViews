@@ -40,6 +40,15 @@ class FrameModeTest {
     }
 
     @Test
+    fun `art fits on a matte unless a manual crop point is set`() {
+        assertTrue(FrameModePolicy.fitsArt(listOf("art"), true, null, null))
+        assertTrue(FrameModePolicy.fitsArt(listOf("art"), true, 0.3f, null))
+        assertFalse(FrameModePolicy.fitsArt(listOf("art"), true, 0.3f, 0.6f))
+        assertFalse(FrameModePolicy.fitsArt(listOf("beach"), true, null, null))
+        assertFalse(FrameModePolicy.fitsArt(emptyList(), false, null, null))
+    }
+
+    @Test
     fun `mixed distribution honors the selected percentage and bounds`() {
         for (percentage in listOf(0, 1, 25, 50, 73, 100)) {
             val artSlides = (0L until 100L).count { FrameModePolicy.mixedTarget(it, percentage) == FrameCategory.ART }
