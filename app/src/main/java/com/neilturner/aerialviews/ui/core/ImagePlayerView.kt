@@ -43,6 +43,7 @@ import com.neilturner.aerialviews.providers.custom.KrillCacheFence
 import com.neilturner.aerialviews.providers.custom.KrillCacheKey
 import com.neilturner.aerialviews.providers.custom.KrillFeed
 import com.neilturner.aerialviews.providers.custom.KrillFrameCache
+import com.neilturner.aerialviews.providers.custom.KrillFrameOptions
 import com.neilturner.aerialviews.providers.custom.KrillImageAuthInterceptor
 import com.neilturner.aerialviews.providers.custom.KrillPortraitHistory
 import com.neilturner.aerialviews.providers.custom.KrillPortraitPairing
@@ -500,6 +501,7 @@ class ImagePlayerView : FrameLayout {
             media.metadata.height,
             media.metadata.pairPartner,
             media.metadata.pairThird,
+            KrillFrameOptions.showsAlone(media.metadata.tags),
         )
 
     internal fun canCompletePortraitTriple(
@@ -1045,7 +1047,7 @@ class ImagePlayerView : FrameLayout {
 
     /** Personal art without a manual crop point is shown whole on a neutral matte (UNS-1750). */
     private fun fitsArt(media: AerialMedia): Boolean =
-        isPrivateKrillImage(media) &&
+        isPrivateKrillImage(media) && !KrillFrameOptions.singleFrame(media.metadata.tags) &&
             FrameModePolicy.fitsArt(media.metadata.tags, media.metadata.tagsKnown, media.metadata.focusX, media.metadata.focusY)
 
     /** A portrait too tall to crop without losing the subject is fitted over the blurred backdrop (UNS-1754). */
@@ -1054,7 +1056,8 @@ class ImagePlayerView : FrameLayout {
         width: Int,
         height: Int,
     ): Boolean {
-        if (!isPrivateKrillImage(media)) return false
+        // Shown as 16:9 in Krill: always a full-screen crop at the focus (UNS-1762).
+        if (!isPrivateKrillImage(media) || KrillFrameOptions.singleFrame(media.metadata.tags)) return false
         val (screenWidth, screenHeight) = resolveTargetSize()
         return !FocusCrop.keepsSubject(
             media.metadata.width ?: width,

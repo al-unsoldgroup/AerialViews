@@ -36,6 +36,26 @@ class KrillPortraitPairingTest {
     }
 
     @Test
+    fun `a photo shown alone in Krill never joins a pair or triple`() {
+        val solo = photo("a", "b").copy(thirdPartner = "c", showsAlone = true)
+        val second = photo("b", "a").copy(thirdPartner = "c")
+        val third = photo("c", null)
+        assertFalse(KrillPortraitPairing.isPair(solo, second, 960, 1080))
+        assertFalse(KrillPortraitPairing.isPair(second, solo, 960, 1080))
+        assertFalse(KrillPortraitPairing.isTriple(solo, second, third, 960, 1080))
+        assertFalse(
+            KrillPortraitPairing.isTriple(
+                photo("a", "b").copy(thirdPartner = "c"),
+                second,
+                third.copy(showsAlone = true),
+                960,
+                1080,
+            ),
+        )
+        assertTrue(KrillPortraitPairing.isPair(solo.copy(showsAlone = false), second, 960, 1080))
+    }
+
+    @Test
     fun `reads the media ID from frame image URLs only`() {
         assertEquals("abc-1", KrillPortraitPairing.mediaIdOf("https://photos.example/api/frame/media/abc-1/image?space=mine"))
         assertNull(KrillPortraitPairing.mediaIdOf("https://photos.example/api/frame/media/abc-1/video?space=mine"))

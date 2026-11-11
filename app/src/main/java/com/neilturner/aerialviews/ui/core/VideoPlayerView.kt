@@ -17,6 +17,7 @@ import com.neilturner.aerialviews.models.enums.ProgressBarLocation
 import com.neilturner.aerialviews.models.enums.ProgressBarType
 import com.neilturner.aerialviews.models.prefs.GeneralPrefs
 import com.neilturner.aerialviews.models.videos.AerialMedia
+import com.neilturner.aerialviews.providers.custom.KrillFrameOptions
 import com.neilturner.aerialviews.services.philips.PhilipsMediaCodecAdapterFactory
 import com.neilturner.aerialviews.ui.controls.ProgressBarEvent
 import com.neilturner.aerialviews.ui.controls.ProgressState
@@ -62,6 +63,9 @@ class VideoPlayerView
         private var isDestroyed = false
         private var canChangePlaybackSpeed = true
         private var playbackSpeed = GeneralPrefs.playbackSpeed
+
+        /** Speed of the current video: a Krill per-item rate overrides the global preference (UNS-1762). */
+        private var activeSpeed = GeneralPrefs.playbackSpeed.toFloatOrNull() ?: 1f
         private var pausedTimestamp: Long = 0
         private var wasPlaying = false
         private val volumeHelper =
@@ -136,6 +140,13 @@ class VideoPlayerView
             state = VideoState() // Reset params for each video
             state.type = media.source
             currentMedia = media
+            activeSpeed =
+                KrillFrameOptions.playbackSpeed(
+                    media.source == AerialMediaSource.KRILL,
+                    media.metadata.tags,
+                    GeneralPrefs.playbackSpeed.toFloatOrNull() ?: 1f,
+                )
+            exoPlayer.setPlaybackSpeed(activeSpeed)
             separateAudioFailed = false
             cancelVolumeFade()
             resetRotation()
@@ -578,7 +589,8 @@ class VideoPlayerView
                 }
 
             playbackSpeed = newSpeed
-            exoPlayer.setPlaybackSpeed(newSpeed.toFloat())
+            activeSpeed = newSpeed.toFloat()
+            exoPlayer.setPlaybackSpeed(activeSpeed)
             GeneralPrefs.playbackSpeed = playbackSpeed
 
             setupAlmostFinishedRunnable()
@@ -631,7 +643,7 @@ class VideoPlayerView
             val fadeDuration = GeneralPrefs.mediaFadeOutDuration.toLong()
 
             // Duration taking into account...
-            val durationMinusSpeed = (duration / GeneralPrefs.playbackSpeed.toDouble()).toLong()
+            val durationMinusSpeed = (duration / activeSpeed.toDouble()).toLong()
             val durationMinusSpeedAndProgress = durationMinusSpeed - progress
             var durationMinusSpeedAndProgressAndFade = durationMinusSpeedAndProgress - fadeDuration
 
@@ -640,7 +652,7 @@ class VideoPlayerView
             }
 
             Timber.i(
-                "Duration: ${duration.milliseconds} (at 1x), Delay: ${durationMinusSpeedAndProgressAndFade.milliseconds} (at ${GeneralPrefs.playbackSpeed}x), Curr. position: ${progress.milliseconds}",
+                "Duration: ${duration.milliseconds} (at 1x), Delay: ${durationMinusSpeedAndProgressAndFade.milliseconds} (at ${activeSpeed}x), Curr. position: ${progress.milliseconds}",
             )
 
             if (progressBar) {
