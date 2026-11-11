@@ -15,6 +15,7 @@ import com.neilturner.aerialviews.models.prefs.GeneralPrefs
 import com.neilturner.aerialviews.models.videos.AerialExifMetadata
 import com.neilturner.aerialviews.models.videos.AerialMedia
 import com.neilturner.aerialviews.models.videos.AerialMediaMetadata
+import com.neilturner.aerialviews.providers.custom.KrillFrameOptions
 import com.neilturner.aerialviews.providers.custom.KrillPortraitHistory
 import com.neilturner.aerialviews.providers.custom.KrillPortraitPairing
 import com.neilturner.aerialviews.providers.custom.KrillPortraitRotation
@@ -132,7 +133,15 @@ class PlaylistCacheRepository(
                 media.map { item ->
                     val portrait =
                         if (item.id in selectedIds && item.type == AerialMediaType.IMAGE.name) {
-                            KrillPortraitPairing.Photo(item.uri, item.width, item.height, item.pairPartner, item.pairThird)
+                            val tags = item.tagsJson?.let { runCatching { Json.decodeFromString<List<String>>(it) }.getOrNull() }.orEmpty()
+                            KrillPortraitPairing.Photo(
+                                item.uri,
+                                item.width,
+                                item.height,
+                                item.pairPartner,
+                                item.pairThird,
+                                KrillFrameOptions.showsAlone(tags),
+                            )
                         } else {
                             null
                         }

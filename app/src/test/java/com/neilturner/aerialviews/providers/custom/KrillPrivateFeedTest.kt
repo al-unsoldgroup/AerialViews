@@ -183,6 +183,36 @@ class KrillPrivateFeedTest {
     }
 
     @Test
+    fun `reads per-item frame options leniently and defaults when absent`() {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse().setBody(
+                    """{"total":4,"media":[{"id":"solo","layout":"single_16_9","tags":["Trip"]},""" +
+                        """{"id":"loner","collage_allowed":false},{"id":"plain"},""" +
+                        """{"id":"odd","layout":{"x":1},"collage_allowed":"no","playback_rate":0.5}]}""",
+                ),
+            )
+            server.enqueue(
+                MockResponse().setBody(
+                    """{"total":4,"media":[{"id":"slow","playback_rate":0.5},{"id":"bad","playback_rate":0.9},""" +
+                        """{"id":"text","playback_rate":"fast","layout":"single_16_9"},{"id":"normal","playback_rate":1}]}""",
+                ),
+            )
+            val feed = KrillPrivateFeed(OkHttpClient(), server.url("/").toString(), "test-token")
+            val photos = feed.photos("mine")
+            assertEquals(listOf("Trip", KrillFrameOptions.SINGLE_16_9), photos[0].tags)
+            assertEquals(listOf(KrillFrameOptions.NO_COLLAGE), photos[1].tags)
+            assertEquals(emptyList<String>(), photos[2].tags)
+            // Malformed values and a video-only field on a photo are ignored, not fatal.
+            assertEquals(emptyList<String>(), photos[3].tags)
+            val videos = feed.videos("mine")
+            assertEquals(0.5f, KrillFrameOptions.playbackRate(videos[0].tags))
+            assertEquals(listOf(null, null, null), videos.drop(1).map { KrillFrameOptions.playbackRate(it.tags) })
+            assertEquals(emptyList<String>(), videos[2].tags)
+        }
+    }
+
+    @Test
     fun `loads spaces and all photo pages using bearer auth`() {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"spaces":[{"id":"mine","name":"My library"}]}"""))

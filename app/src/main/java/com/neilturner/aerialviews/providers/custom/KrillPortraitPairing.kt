@@ -12,6 +12,8 @@ internal object KrillPortraitPairing {
         /** Krill media ID of the server-chosen partner. */
         val partner: String? = null,
         val thirdPartner: String? = null,
+        /** Set in Krill to show as 16:9 or with collages off (UNS-1762): never in a pair or triple. */
+        val showsAlone: Boolean = false,
     ) {
         val mediaId: String? by lazy { mediaIdOf(id) }
     }
@@ -51,7 +53,7 @@ internal object KrillPortraitPairing {
     ): Boolean {
         val width = photo.width ?: return false
         val height = photo.height ?: return false
-        return photo.id.isNotBlank() && width < height &&
+        return photo.id.isNotBlank() && !photo.showsAlone && width < height &&
             KrillResolutionPolicy.isSuitable(width, height, panelWidth, panelHeight, fitInside = true)
     }
 }

@@ -3,6 +3,7 @@ package com.neilturner.aerialviews.providers.custom
 import com.neilturner.aerialviews.data.network.JsonHelper
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 import okhttp3.Call
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -249,6 +250,10 @@ internal class KrillPrivateFeed(
         val pair: ServerPair? = null,
         @SerialName("focus_revision") val focusRevision: Long? = null,
         @SerialName("frame_focus") val frameFocus: FocusPoint? = null,
+        // UNS-1762: read loosely so a malformed or missing option means the default, never a failed feed.
+        @SerialName("playback_rate") val playbackRate: JsonElement? = null,
+        val layout: JsonElement? = null,
+        @SerialName("collage_allowed") val collageAllowed: JsonElement? = null,
     )
 
     /** Server-chosen collage partner (UNS-1754); score and reason are informational. */
@@ -395,7 +400,12 @@ internal class KrillPrivateFeed(
                         ) ?: KrillCaption.cleanLegacy(listOfNotNull(photo.title, photo.credit, photo.description).joinToString(" • ")),
                         photo.width,
                         photo.height,
-                        if (photo.category == "art" && "art" !in photo.tags) photo.tags + "art" else photo.tags,
+                        (if (photo.category == "art" && "art" !in photo.tags) photo.tags + "art" else photo.tags) +
+                            KrillFrameOptions.tags(
+                                photo.playbackRate.takeIf { video },
+                                photo.layout.takeIf { !video },
+                                photo.collageAllowed.takeIf { !video },
+                            ),
                         video,
                         photo.pair?.partnerId?.takeIf { !video && it.isNotBlank() },
                         photo.pair?.thirdId?.takeIf { !video && it.isNotBlank() },
