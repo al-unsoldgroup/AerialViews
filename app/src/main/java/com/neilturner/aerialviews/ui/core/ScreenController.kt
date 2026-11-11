@@ -43,7 +43,6 @@ import com.neilturner.aerialviews.models.prefs.SonosPrefs
 import com.neilturner.aerialviews.models.videos.AerialMedia
 import com.neilturner.aerialviews.providers.ProviderFetchResult
 import com.neilturner.aerialviews.providers.custom.KrillCachedMetadataRefresh
-import com.neilturner.aerialviews.providers.custom.KrillDeletionRequest
 import com.neilturner.aerialviews.providers.custom.KrillFrameCache
 import com.neilturner.aerialviews.providers.custom.KrillPortraitHistory
 import com.neilturner.aerialviews.providers.custom.KrillPrivateFeed
@@ -51,7 +50,6 @@ import com.neilturner.aerialviews.providers.custom.KrillPrivateProvider
 import com.neilturner.aerialviews.providers.custom.KrillSessionManager
 import com.neilturner.aerialviews.providers.custom.KrillTokenStore
 import com.neilturner.aerialviews.providers.custom.cancellableKrillClient
-import com.neilturner.aerialviews.providers.custom.deletionKrillClient
 import com.neilturner.aerialviews.providers.custom.runKrillCaptionSchedule
 import com.neilturner.aerialviews.services.CachedPlaylistGate
 import com.neilturner.aerialviews.services.KtorServer
@@ -401,8 +399,6 @@ class ScreenController(
                     delay(5_000)
                 }
             }
-
-        mainScope.launch { recoverPendingDeletion() }
 
         mainScope.launch {
             // Launch if we have permission
@@ -1706,8 +1702,7 @@ class ScreenController(
         ) {
             return true
         }
-        val pending = session?.pendingDeletion
-        return pending != null && KrillPrivateFeed.sameFramePhoto(pending.imageUrl, media.uri.toString())
+        return false
     }
 
     private fun isPairRejected(
@@ -1956,32 +1951,6 @@ class ScreenController(
             } catch (_: Exception) {
                 Timber.w("Krill in-memory metadata refresh deferred")
             }
-        }
-    }
-
-    /** Retry a saved operation when a screen starts and until the server confirms it. */
-    private suspend fun recoverPendingDeletion() {
-        while (true) {
-            try {
-                withContext(Dispatchers.IO) {
-                    val job = currentCoroutineContext()[Job]
-                    val client = deletionKrillClient(job)
-                    KrillFrameCache.retryDeletionCleanup(context.applicationContext)
-                    val session = KrillSessionManager(context).cachedSession()
-                    val pending = session?.pendingDeletion
-                    if (session != null && pending != null) {
-                        val request = KrillDeletionRequest(context.applicationContext, client) { job?.ensureActive() }
-                        if (request.reconcile(session.cacheNamespace) == "unknown") {
-                            request.submit(session.cacheNamespace, pending.imageUrl)
-                        }
-                    }
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                // Keep the operation for the next attempt, including after restart.
-            }
-            delay(30_000)
         }
     }
 

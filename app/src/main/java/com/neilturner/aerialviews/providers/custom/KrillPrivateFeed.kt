@@ -8,7 +8,6 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 
 /** Read the authenticated frame API. Credentials are sent only to the configured library origin. */
@@ -186,36 +185,6 @@ internal class KrillPrivateFeed(
     )
 
     @Serializable
-    private data class Permissions(
-        val canDelete: Boolean,
-    )
-
-    fun canDelete(
-        space: String,
-        onCall: (Call) -> Unit = {},
-    ): Boolean {
-        require(space.isNotBlank()) { "A space is required" }
-        val url =
-            base
-                .newBuilder()
-                .encodedPath("/api/frame/permissions")
-                .addQueryParameter("space", space)
-                .build()
-        val request =
-            Request
-                .Builder()
-                .url(url)
-                .header("Authorization", "Bearer $accessToken")
-                .build()
-        val call = client.newCall(request)
-        onCall(call)
-        return call.execute().use { response ->
-            if (!response.isSuccessful) throw IOException("Krill frame API HTTP ${response.code}")
-            JsonHelper.json.decodeFromString<Permissions>(response.body.string()).canDelete
-        }
-    }
-
-    @Serializable
     private data class Page(
         val media: List<Photo>,
         val total: Int,
@@ -353,141 +322,6 @@ internal class KrillPrivateFeed(
 
     fun libraryRevision(space: String): String? =
         JsonHelper.json.decodeFromString<Page>(get("/api/frame/media", space, 0, pageLimit = 1)).revision
-
-    fun deletePhoto(
-        imageUrl: String,
-        space: String,
-        operation: String,
-        onCall: (Call) -> Unit = {},
-    ): String {
-        require(isSelectedImage(imageUrl, base.toString(), space)) { "Photo is outside the selected library" }
-        require(operation.matches(Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"))) {
-            "Invalid operation ID"
-        }
-        val id = imageUrl.toHttpUrl().pathSegments[3]
-        val url =
-            base
-                .newBuilder()
-                .encodedPath("/api/frame/media/")
-                .addPathSegment(id)
-                .addQueryParameter("space", space)
-                .build()
-        val request =
-            Request
-                .Builder()
-                .url(url)
-                .header("Authorization", "Bearer $accessToken")
-                .header("Idempotency-Key", operation)
-                .delete()
-                .build()
-        val call = client.newCall(request)
-        onCall(call)
-        return call.execute().use { response ->
-            if (!response.isSuccessful) throw IOException("Krill frame API HTTP ${response.code}")
-            when (response.code) {
-                200, 202 -> {
-                    val result = JsonHelper.json.decodeFromString<DeletionRequest>(response.body.string())
-                    if (result.operation != operation ||
-                        (response.code == 202 && result.status != "pending") ||
-                        (response.code == 200 && result.status != "completed")
-                    ) {
-                        throw IOException("Invalid Krill deletion response")
-                    }
-                    result.status
-                }
-
-                else -> {
-                    throw IOException("Unexpected Krill deletion response HTTP ${response.code}")
-                }
-            }
-        }
-    }
-
-    @Serializable
-    private data class DeletionRequest(
-        val status: String,
-        val operation: String,
-    )
-
-    @Serializable
-    private data class DeletionProgress(
-        val status: String,
-    )
-
-    fun deletionStatus(
-        imageUrl: String,
-        space: String,
-        operation: String,
-        onCall: (Call) -> Unit = {},
-    ): String {
-        require(isSelectedImage(imageUrl, base.toString(), space)) { "Photo is outside the selected library" }
-        require(operation.matches(Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"))) {
-            "Invalid operation ID"
-        }
-        val url =
-            base
-                .newBuilder()
-                .encodedPath("/api/frame/media/")
-                .addPathSegment(imageUrl.toHttpUrl().pathSegments[3])
-                .addPathSegment("deletion-status")
-                .addQueryParameter("space", space)
-                .build()
-        val request =
-            Request
-                .Builder()
-                .url(url)
-                .header("Authorization", "Bearer $accessToken")
-                .header("Idempotency-Key", operation)
-                .build()
-        val call = client.newCall(request)
-        onCall(call)
-        return call.execute().use { response ->
-            if (!response.isSuccessful) throw IOException("Krill frame API HTTP ${response.code}")
-            val status = JsonHelper.json.decodeFromString<DeletionProgress>(response.body.string()).status
-            if (status !in
-                setOf("pending", "completed", "cancelled", "expired", "unknown")
-            ) {
-                throw IOException("Invalid Krill deletion status")
-            }
-            status
-        }
-    }
-
-    fun cancelUnacceptedDeletion(
-        imageUrl: String,
-        space: String,
-        operation: String,
-        onCall: (Call) -> Unit = {},
-    ): String {
-        require(isSelectedImage(imageUrl, base.toString(), space)) { "Photo is outside the selected library" }
-        require(operation.matches(Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"))) {
-            "Invalid operation ID"
-        }
-        val url =
-            base
-                .newBuilder()
-                .encodedPath("/api/frame/media/")
-                .addPathSegment(imageUrl.toHttpUrl().pathSegments[3])
-                .addPathSegment("deletion-cancel")
-                .addQueryParameter("space", space)
-                .build()
-        val request =
-            Request
-                .Builder()
-                .url(url)
-                .header("Authorization", "Bearer $accessToken")
-                .header("Idempotency-Key", operation)
-                .post(ByteArray(0).toRequestBody())
-                .build()
-        val call = client.newCall(request)
-        onCall(call)
-        return call.execute().use { response ->
-            if (!response.isSuccessful) throw IOException("Krill frame API HTTP ${response.code}")
-            val status = JsonHelper.json.decodeFromString<DeletionProgress>(response.body.string()).status
-            if (status !in setOf("pending", "completed", "cancelled", "expired")) throw IOException("Invalid Krill cancellation status")
-            status
-        }
-    }
 
     fun photos(
         space: String,

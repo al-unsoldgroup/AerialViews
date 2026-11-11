@@ -134,86 +134,12 @@ class KrillPrivateFeedTest {
     }
 
     @Test
-    fun `cancel requires a server confirmed outcome`() {
-        MockWebServer().use { server ->
-            val feed = KrillPrivateFeed(OkHttpClient(), server.url("/").toString(), "test-token")
-            val image = server.url("/api/frame/media/one/image?space=mine").toString()
-            val operation = "a1b2c3d4-1234-4000-8000-123456789abc"
-            server.enqueue(MockResponse().setBody("""{"status":"cancelled"}"""))
-            assertEquals("cancelled", feed.cancelUnacceptedDeletion(image, "mine", operation))
-            val request = server.takeRequest()
-            assertEquals("POST", request.method)
-            assertEquals("/api/frame/media/one/deletion-cancel?space=mine", request.path)
-            assertEquals(operation, request.getHeader("Idempotency-Key"))
-            server.enqueue(MockResponse().setBody("""{"status":"expired"}"""))
-            assertEquals("expired", feed.cancelUnacceptedDeletion(image, "mine", operation))
-            server.enqueue(MockResponse().setBody("""{"status":"unknown"}"""))
-            assertThrows(IOException::class.java) { feed.cancelUnacceptedDeletion(image, "mine", operation) }
-        }
-    }
-
-    @Test
-    fun `checks deletion capability on the selected library`() {
-        MockWebServer().use { server ->
-            val feed = KrillPrivateFeed(OkHttpClient(), server.url("/").toString(), "test-token")
-            server.enqueue(MockResponse().setBody("""{"canDelete":false}"""))
-            assertFalse(feed.canDelete("mine"))
-            val request = server.takeRequest()
-            assertEquals("/api/frame/permissions?space=mine", request.path)
-            assertEquals("Bearer test-token", request.getHeader("Authorization"))
-        }
-    }
-
-    @Test
     fun `pending photo identity ignores query order and fragment but retains space and origin`() {
         val original = "https://photos.example/api/frame/media/one/image?space=mine"
         assertTrue(KrillPrivateFeed.sameFramePhoto(original, "https://photos.example/api/frame/media/one/image?x=1&space=mine#detail"))
         assertFalse(KrillPrivateFeed.sameFramePhoto(original, "https://photos.example/api/frame/media/one/image?space=other"))
         assertFalse(KrillPrivateFeed.sameFramePhoto(original, "https://other.example/api/frame/media/one/image?space=mine"))
         assertFalse(KrillPrivateFeed.sameFramePhoto(original, "https://photos.example/api/frame/media/two/image?space=mine"))
-    }
-
-    @Test
-    fun `checks deletion status only within the selected library`() {
-        MockWebServer().use { server ->
-            val feed = KrillPrivateFeed(OkHttpClient(), server.url("/").toString(), "test-token")
-            val image = server.url("/api/frame/media/one/image?space=mine").toString()
-            val operation = "a1b2c3d4-1234-4000-8000-123456789abc"
-            assertThrows(IllegalArgumentException::class.java) { feed.deletionStatus(image, "other", operation) }
-            server.enqueue(MockResponse().setBody("""{"status":"completed"}"""))
-            assertEquals("completed", feed.deletionStatus(image, "mine", operation))
-            val request = server.takeRequest()
-            assertEquals("/api/frame/media/one/deletion-status?space=mine", request.path)
-            assertEquals("Bearer test-token", request.getHeader("Authorization"))
-            assertEquals(operation, request.getHeader("Idempotency-Key"))
-            server.enqueue(MockResponse().setBody("""{"status":"unexpected"}"""))
-            assertThrows(IOException::class.java) { feed.deletionStatus(image, "mine", operation) }
-        }
-    }
-
-    @Test
-    fun `delete only sends selected library photos without following redirects`() {
-        MockWebServer().use { server ->
-            val feed = KrillPrivateFeed(OkHttpClient(), server.url("/").toString(), "test-token")
-            val image = server.url("/api/frame/media/one/image?space=mine").toString()
-            val operation = "a1b2c3d4-1234-4000-8000-123456789abc"
-            assertThrows(IllegalArgumentException::class.java) { feed.deletePhoto(image, "other", operation) }
-            assertEquals(0, server.requestCount)
-            server.enqueue(MockResponse().setResponseCode(302).addHeader("Location", server.url("/other")))
-            assertThrows(IOException::class.java) { feed.deletePhoto(image, "mine", operation) }
-            val request = server.takeRequest()
-            assertEquals("DELETE", request.method)
-            assertEquals("/api/frame/media/one?space=mine", request.path)
-            assertEquals("Bearer test-token", request.getHeader("Authorization"))
-            assertEquals(operation, request.getHeader("Idempotency-Key"))
-            assertEquals(1, server.requestCount)
-            server.enqueue(MockResponse().setResponseCode(202).setBody("""{"status":"pending","operation":"$operation"}"""))
-            assertEquals("pending", feed.deletePhoto(image, "mine", operation))
-            server.enqueue(MockResponse().setResponseCode(200).setBody("""{"status":"completed","operation":"$operation"}"""))
-            assertEquals("completed", feed.deletePhoto(image, "mine", operation))
-            server.enqueue(MockResponse().setResponseCode(200))
-            assertThrows(Exception::class.java) { feed.deletePhoto(image, "mine", operation) }
-        }
     }
 
     @Test
