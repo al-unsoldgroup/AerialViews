@@ -25,4 +25,4 @@ jobs:
 
     - name: Run tests and Build with Gradle
       run: |
-        ./gradlew testGithubReleaseUnitTest
+        ./gradlew testGithubDebugUnitTest
