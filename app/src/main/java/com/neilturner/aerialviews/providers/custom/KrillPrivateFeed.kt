@@ -390,6 +390,7 @@ internal class KrillPrivateFeed(
                                 photo.capturedLocal,
                                 photo.artworkTitle,
                                 photo.artworkArtist,
+                                photo.category == "art" || "art" in photo.tags,
                             ),
                         ) ?: KrillCaption.cleanLegacy(listOfNotNull(photo.title, photo.credit, photo.description).joinToString(" • ")),
                         photo.width,

@@ -2,6 +2,7 @@ package com.neilturner.aerialviews.ui.core
 
 import android.content.Context
 import android.net.Uri
+import com.neilturner.aerialviews.R
 import com.neilturner.aerialviews.models.enums.AerialMediaSource
 import com.neilturner.aerialviews.models.enums.AerialMediaType
 import com.neilturner.aerialviews.models.enums.DateType
@@ -147,6 +148,21 @@ internal class MetadataResolverTest {
                     description = "Camera description",
                 )
             assertEquals("Camera description", resolver.resolve(context, media, defaultPrefs.copy(photoSelection = "DESCRIPTION")).text)
+        }
+
+    @Test
+    fun `Krill art without a caption is Untitled, not its capture date`(): Unit =
+        runTest {
+            every { context.getString(R.string.frame_caption_untitled) } returns "Untitled"
+            val photo =
+                createMedia(
+                    type = AerialMediaType.IMAGE,
+                    source = AerialMediaSource.KRILL,
+                    date = "2020:01:02 12:00:00",
+                )
+            val art = photo.copy(metadata = photo.metadata.copy(tags = listOf("art"), tagsKnown = true))
+            val prefs = defaultPrefs.copy(photoSelection = "PHOTO_CONTEXT,DATE_TAKEN")
+            assertEquals("Untitled", resolver.resolve(context, art, prefs).text)
         }
 
     @Test

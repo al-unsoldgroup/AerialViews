@@ -1064,5 +1064,6 @@
     <string name="frame_start_on_boot_summary">Requires permission to appear over other apps on supported devices.</string>
     <string name="frame_boot_permission_needed">Allow this app to appear over other apps in device settings.</string>
     <string name="frame_offline">Offline</string>
+    <string name="frame_caption_untitled">Untitled</string>
     <string name="frame_cancel">Cancel</string>
 </resources>

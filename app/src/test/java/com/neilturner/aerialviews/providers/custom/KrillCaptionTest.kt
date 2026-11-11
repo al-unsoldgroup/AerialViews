@@ -47,6 +47,14 @@ class KrillCaptionTest {
     }
 
     @Test
+    fun `art without title or artist is blank for Untitled, never its place or capture date`() {
+        val untitled = KrillCaption.Fields(placeCity = "Paris", capturedLocal = time, art = true)
+        assertEquals("", KrillCaption.format(untitled))
+        assertEquals("Water Lilies", KrillCaption.format(untitled.copy(artworkTitle = "Water Lilies")))
+        assertEquals("Paris\nThu 22 Oct 2026, 4:07 pm", KrillCaption.format(untitled.copy(art = false)))
+    }
+
+    @Test
     fun `unknown or invalid fields are left out`() {
         assertNull(KrillCaption.format(KrillCaption.Fields()))
         assertNull(KrillCaption.format(KrillCaption.Fields(placeCity = " ", capturedLocal = "2026-10-22T03:07:18Z")))
@@ -82,6 +90,7 @@ class KrillCaptionTest {
         every { editor.putBoolean(any(), any()) } returns editor
         val prefs = mockk<SharedPreferences>()
         every { prefs.getBoolean("krill_caption_overlays_migrated", false) } returns false
+        every { prefs.getBoolean("krill_caption_shade_migrated", false) } returns false
         every { prefs.edit() } returns editor
         every { prefs.getString(any(), null) } returns null
         every { prefs.getString("overlay_metadata1_photos", null) } returns "PHOTO_CONTEXT,DESCRIPTION,LOCATION,DATE_TAKEN"
@@ -93,10 +102,24 @@ class KrillCaptionTest {
         verify { editor.putString("overlay_metadata3_photos", "") }
         verify(exactly = 0) { editor.putString("overlay_metadata2_photos", any()) }
         verify { editor.putBoolean("krill_caption_overlays_migrated", true) }
+        verify { editor.putBoolean("gradient_bottom_show", false) }
+        verify { editor.putBoolean("krill_caption_shade_migrated", true) }
         verify { editor.apply() }
+
+        // A frame that already migrated its captions still drops the full-width bottom shade, once.
+        val shadeOnly = mockk<SharedPreferences>()
+        val shadeEditor = mockk<SharedPreferences.Editor>(relaxed = true)
+        every { shadeEditor.putBoolean(any(), any()) } returns shadeEditor
+        every { shadeOnly.getBoolean("krill_caption_overlays_migrated", false) } returns true
+        every { shadeOnly.getBoolean("krill_caption_shade_migrated", false) } returns false
+        every { shadeOnly.edit() } returns shadeEditor
+        KrillCaption.migrateOverlayPrefs(shadeOnly)
+        verify { shadeEditor.putBoolean("gradient_bottom_show", false) }
+        verify(exactly = 0) { shadeEditor.putString(any(), any()) }
 
         val done = mockk<SharedPreferences>()
         every { done.getBoolean("krill_caption_overlays_migrated", false) } returns true
+        every { done.getBoolean("krill_caption_shade_migrated", false) } returns true
         KrillCaption.migrateOverlayPrefs(done)
         verify(exactly = 0) { done.edit() }
     }

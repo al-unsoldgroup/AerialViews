@@ -1,6 +1,7 @@
 package com.neilturner.aerialviews.ui.core
 
 import android.content.Context
+import com.neilturner.aerialviews.R
 import com.neilturner.aerialviews.data.storage.FileHelper
 import com.neilturner.aerialviews.models.enums.AerialMediaSource
 import com.neilturner.aerialviews.models.enums.AerialMediaType
@@ -121,6 +122,12 @@ internal class MetadataResolver(
                     // Krill captions already carry verified place and time; adding EXIF would repeat them.
                     if (media.source == AerialMediaSource.KRILL && !caption.isNullOrBlank()) {
                         return ResolvedMetadata(caption, emptyMap(), MetadataType.STATIC)
+                    }
+                    // Art without a title or artist is "Untitled", never its capture date (UNS-1759).
+                    if (media.source == AerialMediaSource.KRILL && media.metadata.shortDescription.isBlank() &&
+                        FrameModePolicy.category(media.metadata.tags, media.metadata.tagsKnown) == FrameCategory.ART
+                    ) {
+                        return ResolvedMetadata(context.getString(R.string.frame_caption_untitled), emptyMap(), MetadataType.STATIC)
                     }
                     val location = withTimeoutOrNull(3_000) { resolveSharedMetadata(context, media, "LOCATION", preferences)?.text }
                     val date = resolveSharedMetadata(context, media, "DATE_TAKEN", preferences)?.text
