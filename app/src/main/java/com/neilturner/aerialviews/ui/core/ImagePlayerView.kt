@@ -290,7 +290,7 @@ class ImagePlayerView : FrameLayout {
                             if (generation == preloadGeneration && (access?.second?.isValid() != false)) {
                                 Timber.d("Krill image preload completed")
                                 val cropUrl =
-                                    if (fitsArt(media)) {
+                                    if (fitsArt(media) || fitsTall(media, result.image.width, result.image.height)) {
                                         null
                                     } else {
                                         runCatching {
@@ -947,7 +947,9 @@ class ImagePlayerView : FrameLayout {
                                 Timber.d("Krill image loaded from ${result.dataSource}")
                             }
                             setScaleMode(result.image.width, result.image.height, media, cropFallback)
-                            if (media.source == AerialMediaSource.KRILL && !cropFallback && !fitsArt(media)) {
+                            if (media.source == AerialMediaSource.KRILL && !cropFallback && !fitsArt(media) &&
+                                !fitsTall(media, result.image.width, result.image.height)
+                            ) {
                                 val cropUrl =
                                     runCatching {
                                         KrillFeed.cropForDimensions(
@@ -1045,6 +1047,23 @@ class ImagePlayerView : FrameLayout {
     private fun fitsArt(media: AerialMedia): Boolean =
         isPrivateKrillImage(media) &&
             FrameModePolicy.fitsArt(media.metadata.tags, media.metadata.tagsKnown, media.metadata.focusX, media.metadata.focusY)
+
+    /** A portrait too tall to crop without losing the subject is fitted over the blurred backdrop (UNS-1754). */
+    private fun fitsTall(
+        media: AerialMedia,
+        width: Int,
+        height: Int,
+    ): Boolean {
+        if (!isPrivateKrillImage(media)) return false
+        val (screenWidth, screenHeight) = resolveTargetSize()
+        return !FocusCrop.keepsSubject(
+            media.metadata.width ?: width,
+            media.metadata.height ?: height,
+            screenWidth,
+            screenHeight,
+            media.metadata.focusX != null && media.metadata.focusY != null,
+        )
+    }
 
     private fun shouldShowBlurBackground(
         media: AerialMedia,
@@ -1182,10 +1201,20 @@ class ImagePlayerView : FrameLayout {
                 return
             }
         }
+        if (!alreadyCropped && fitsTall(media, width, height)) {
+            activeFocus = null
+            foregroundImageView.scaleType = ImageView.ScaleType.FIT_CENTER
+            return
+        }
         val x = media.metadata.focusX
         val y = media.metadata.focusY
-        if (isPrivateKrillImage(media) && !alreadyCropped && x != null && y != null) {
-            activeFocus = FocusCrop.Point(x, y)
+        if (isPrivateKrillImage(media) && !alreadyCropped) {
+            activeFocus =
+                if (x != null && y != null) {
+                    FocusCrop.Point(x, y)
+                } else {
+                    FocusCrop.defaultFocus(media.metadata.width ?: width, media.metadata.height ?: height)
+                }
             if (applyFocusedPlacement()) return
         }
         foregroundImageView.scaleType =

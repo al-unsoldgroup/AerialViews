@@ -12,6 +12,9 @@ internal object KrillCaption {
     private val fileName = Regex("""^\S+\.(heic|heif|jpe?g|png|webp|gif|avif|dng|tiff?|mov|mp4|m4v)$""", RegexOption.IGNORE_CASE)
     private val isoTimestamp = Regex("""^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$""")
 
+    /** Default names the share upload gave items without a real one; never information (UNS-1754). */
+    private val genericDefault = Regex("""^shared from (an? |my )?(iphone|ipad|ios|android|phone|device)$""", RegexOption.IGNORE_CASE)
+
     data class Fields(
         val placeAttraction: String? = null,
         val placeNeighborhood: String? = null,
@@ -46,13 +49,13 @@ internal object KrillCaption {
             null
         }
 
-    /** Older captions joined title, credit and description; drop file names and raw timestamps. */
+    /** Older captions joined title, credit and description; drop file names, raw timestamps and upload defaults. */
     fun cleanLegacy(caption: String): String =
         caption
             .split(" • ")
             .map { it.trim() }
             .filterNot { part ->
-                part.isEmpty() || fileName.matches(part) || isoTimestamp.matches(part) ||
+                part.isEmpty() || fileName.matches(part) || genericDefault.matches(part) || isoTimestamp.matches(part) ||
                     (part.length >= 60 && part.none(Char::isWhitespace) && part.count { it == '-' || it == '_' } >= 3)
             }.distinct()
             .joinToString(" • ")

@@ -48,10 +48,10 @@ class KrillFeedTest {
     }
 
     @Test
-    fun `private portrait can request a full screen automatic crop`() {
+    fun `private portrait requests a full screen crop that keeps faces`() {
         val image = "https://photos.example/api/frame/media/picture/image?space=mine"
         assertEquals(
-            "https://photos.example/api/frame/media/picture/image?space=mine&crop=auto&width=1920&height=1080",
+            "https://photos.example/api/frame/media/picture/image?space=mine&crop=auto&width=1920&height=1080&gravity=face",
             KrillFeed.cropForDimensions(image, 2400, 3200, 1920, 1080, privateSmartCrop = true),
         )
     }
