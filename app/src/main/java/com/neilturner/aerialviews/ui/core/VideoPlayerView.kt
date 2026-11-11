@@ -1,6 +1,7 @@
 package com.neilturner.aerialviews.ui.core
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.AttributeSet
 import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
@@ -70,6 +71,8 @@ class VideoPlayerView
             )
         private var forcedMuted = false
         private var currentMedia: AerialMedia? = null
+        private var unknownFrameDuration = false
+        private val frameClock = FramePlaybackClock()
         private var separateAudioFailed = false
 
         private val progressBar =
@@ -124,6 +127,12 @@ class VideoPlayerView
         }
 
         fun setVideo(media: AerialMedia) {
+            VideoPlayerHelper.setPrivatePlayback(
+                exoPlayer,
+                media.source in setOf(AerialMediaSource.KRILL, AerialMediaSource.CUSTOM, AerialMediaSource.HLS, AerialMediaSource.RTSP),
+            )
+            unknownFrameDuration = false
+            frameClock.reset()
             state = VideoState() // Reset params for each video
             state.type = media.source
             currentMedia = media
@@ -193,6 +202,10 @@ class VideoPlayerView
             // Ignore if there is nothing to restart (eg. before the first video, or after it ended)
             if (exoPlayer.playbackState == Player.STATE_IDLE || exoPlayer.playbackState == Player.STATE_ENDED) return
             exoPlayer.seekTo(0)
+            if (unknownFrameDuration) {
+                frameClock.reset()
+                if (exoPlayer.isPlaying) frameClock.resume(SystemClock.elapsedRealtime())
+            }
             // Restart always resumes playback, even if the video was paused
             exoPlayer.playWhenReady = true
             // Recalculate remaining time and restart timer
@@ -225,9 +238,11 @@ class VideoPlayerView
 
         fun start() {
             exoPlayer.playWhenReady = true
+            if (unknownFrameDuration && exoPlayer.isPlaying) frameClock.resume(SystemClock.elapsedRealtime())
         }
 
         fun pause() {
+            if (unknownFrameDuration) frameClock.pause(SystemClock.elapsedRealtime())
             wasPlaying = exoPlayer.playWhenReady
             exoPlayer.playWhenReady = false
             pausedTimestamp = System.currentTimeMillis()
@@ -237,6 +252,7 @@ class VideoPlayerView
         fun resume() {
             if (wasPlaying) {
                 exoPlayer.playWhenReady = true
+                if (unknownFrameDuration && exoPlayer.isPlaying) frameClock.resume(SystemClock.elapsedRealtime())
                 // Recalculate remaining time and restart timer
                 setupAlmostFinishedRunnable()
             }
@@ -272,6 +288,10 @@ class VideoPlayerView
 
                 Player.STATE_BUFFERING -> {
                     Timber.i("Buffering...")
+                    if (unknownFrameDuration) {
+                        frameClock.pause(SystemClock.elapsedRealtime())
+                        removeCallbacks(almostFinishedRunnable)
+                    }
                     if (progressBar) GlobalBus.post(ProgressBarEvent(ProgressState.PAUSE))
                 }
             }
@@ -284,7 +304,16 @@ class VideoPlayerView
                 Timber.i("Preparing...")
 
                 // Waiting for... https://youtrack.jetbrains.com/issue/KT-19627/Object-name-based-destructuring
-                val result = VideoPlayerHelper.calculatePlaybackParameters(exoPlayer, GeneralPrefs, state.type)
+                val slideDuration = (GeneralPrefs.slideshowSpeed.toLongOrNull() ?: 30L).coerceAtLeast(1L) * 1000L
+                val frameTiming = if (state.type == AerialMediaSource.KRILL) frameVideoTiming(exoPlayer.duration, slideDuration) else null
+                unknownFrameDuration = state.type == AerialMediaSource.KRILL && exoPlayer.duration <= 0
+                if (unknownFrameDuration && exoPlayer.isPlaying) frameClock.resume(SystemClock.elapsedRealtime())
+                val result =
+                    if (frameTiming != null) {
+                        0L to frameTiming.durationMillis
+                    } else {
+                        VideoPlayerHelper.calculatePlaybackParameters(exoPlayer, GeneralPrefs, state.type)
+                    }
                 state.startPosition = result.first
                 state.endPosition = result.second
 
@@ -292,7 +321,9 @@ class VideoPlayerView
                 val maxVideoLength = GeneralPrefs.maxVideoLength.toLong() * 1000
                 val isLengthLimited = maxVideoLength >= 10000
                 val isShortVideo = exoPlayer.duration in 1..<maxVideoLength
-                if (isShortVideo && isLengthLimited && GeneralPrefs.loopShortVideos) {
+                if ((frameTiming?.repeat == true) ||
+                    (frameTiming == null && isShortVideo && isLengthLimited && GeneralPrefs.loopShortVideos)
+                ) {
                     player?.repeatMode = Player.REPEAT_MODE_ALL
                 } else {
                     player?.repeatMode = Player.REPEAT_MODE_OFF
@@ -354,12 +385,26 @@ class VideoPlayerView
                 Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT -> {
                     state.loopCount++
                     Timber.i("Reason: Looping video, count: ${state.loopCount}")
-                    if (exoPlayer.isPlaying) {
+                    // Keep the frame slide deadline across short loops. Rescheduling on every
+                    // loop can postpone it indefinitely when a clip is around one second long.
+                    if (exoPlayer.isPlaying && !unknownFrameDuration && state.type != AerialMediaSource.KRILL) {
                         setupAlmostFinishedRunnable()
                     }
                 }
             }
             super.onMediaItemTransition(mediaItem, reason)
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            super.onIsPlayingChanged(isPlaying)
+            if (!unknownFrameDuration || !state.prepared) return
+            if (isPlaying) {
+                frameClock.resume(SystemClock.elapsedRealtime())
+                setupAlmostFinishedRunnable()
+            } else {
+                frameClock.pause(SystemClock.elapsedRealtime())
+                removeCallbacks(almostFinishedRunnable)
+            }
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -368,7 +413,11 @@ class VideoPlayerView
 
             if (retryWithoutSeparateAudio()) return
 
-            FirebaseHelper.crashlyticsException(error.cause)
+            if (currentMedia?.source !in
+                setOf(AerialMediaSource.KRILL, AerialMediaSource.CUSTOM, AerialMediaSource.HLS, AerialMediaSource.RTSP)
+            ) {
+                FirebaseHelper.crashlyticsException(error.cause)
+            }
 
             post(onErrorRunnable)
         }
@@ -381,7 +430,7 @@ class VideoPlayerView
                 return false
             }
 
-            Timber.w("Playback failed with a separate audio stream, retrying video only: ${media.audioUri}")
+            Timber.w("Playback failed with a separate audio stream, retrying video only")
             separateAudioFailed = true
             state.prepared = false
             state.loopCount = 0
@@ -391,7 +440,15 @@ class VideoPlayerView
 
         override fun onPlayerErrorChanged(error: PlaybackException?) {
             super.onPlayerErrorChanged(error)
-            error?.let { Timber.e(it) }
+            error?.let {
+                if (currentMedia?.source in
+                    setOf(AerialMediaSource.KRILL, AerialMediaSource.CUSTOM, AerialMediaSource.HLS, AerialMediaSource.RTSP)
+                ) {
+                    Timber.w("Private or custom video playback failed")
+                } else {
+                    Timber.e(it)
+                }
+            }
         }
 
         @Suppress("DEPRECATION")
@@ -534,6 +591,19 @@ class VideoPlayerView
 
         private fun setupAlmostFinishedRunnable() {
             removeCallbacks(almostFinishedRunnable)
+
+            if (unknownFrameDuration) {
+                if (!exoPlayer.isPlaying) {
+                    frameClock.pause(SystemClock.elapsedRealtime())
+                    return
+                }
+                frameClock.resume(SystemClock.elapsedRealtime())
+                val progress = frameClock.elapsed(SystemClock.elapsedRealtime()).coerceAtMost(state.endPosition)
+                val remaining = (state.endPosition - progress - GeneralPrefs.mediaFadeOutDuration.toLong()).coerceAtLeast(1000L)
+                if (progressBar) GlobalBus.post(ProgressBarEvent(ProgressState.START, progress, state.endPosition))
+                postDelayed(almostFinishedRunnable, remaining)
+                return
+            }
 
             if (state.startPosition <= 0 && state.endPosition <= 0 && state.type != AerialMediaSource.RTSP) {
                 if (GeneralPrefs.loopUntilSkipped) {

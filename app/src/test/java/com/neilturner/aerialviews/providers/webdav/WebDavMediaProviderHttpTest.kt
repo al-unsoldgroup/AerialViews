@@ -315,11 +315,9 @@ internal class WebDavMediaProviderHttpTest {
     @Test
     fun `reports a connection failure and hints at a non default port`() =
         runTest {
-            // Nothing is listening on this port, so the connection is refused.
-            val unusedPort = server.port
-            server.shutdown()
-
-            val result = provider(hostName = "localhost").fetch()
+            // Simulate refusal without assuming that the host's port 80 is unused.
+            val client = OkHttpClient.Builder().addInterceptor { throw java.net.ConnectException("connection refused") }.build()
+            val result = provider(hostName = "localhost", client = client).fetch()
 
             val error = assertInstanceOf(ProviderFetchResult.Error::class.java, result)
             assertTrue(
@@ -330,13 +328,13 @@ internal class WebDavMediaProviderHttpTest {
                 error.message.orEmpty().contains("non-default port"),
                 "unexpected message: ${error.message}",
             )
-            assertTrue(unusedPort > 0)
         }
 
     private fun provider(
         hostName: String = "localhost:${server.port}",
         searchSubfolders: Boolean = false,
         musicEnabled: Boolean = false,
+        client: OkHttpClient = OkHttpClient(),
     ): WebDavMediaProvider =
         WebDavMediaProvider(
             context = context,
@@ -359,7 +357,7 @@ internal class WebDavMediaProviderHttpTest {
                     override fun settingsHash(): String = "test"
                 },
             clientFactory = {
-                OkHttpWebDavClient(OkHttpClient()).apply {
+                OkHttpWebDavClient(client).apply {
                     setCredentials("", "", true)
                 }
             },

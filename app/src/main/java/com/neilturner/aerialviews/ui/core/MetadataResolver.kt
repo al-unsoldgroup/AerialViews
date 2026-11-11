@@ -8,9 +8,11 @@ import com.neilturner.aerialviews.models.enums.DateType
 import com.neilturner.aerialviews.models.enums.LocationType
 import com.neilturner.aerialviews.models.enums.MetadataType
 import com.neilturner.aerialviews.models.videos.AerialMedia
+import com.neilturner.aerialviews.providers.custom.KrillCaption
 import com.neilturner.aerialviews.ui.helpers.DateHelper
 import com.neilturner.aerialviews.ui.helpers.GeocoderHelper
 import com.neilturner.aerialviews.utils.filenameWithoutExtension
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
 
 internal class MetadataResolver(
@@ -114,6 +116,23 @@ internal class MetadataResolver(
 
         for (entry in selection) {
             when (entry) {
+                "PHOTO_CONTEXT" -> {
+                    val caption = resolveSharedMetadata(context, media, "DESCRIPTION", preferences)?.text
+                    // Krill captions already carry verified place and time; adding EXIF would repeat them.
+                    if (media.source == AerialMediaSource.KRILL && !caption.isNullOrBlank()) {
+                        return ResolvedMetadata(caption, emptyMap(), MetadataType.STATIC)
+                    }
+                    val location = withTimeoutOrNull(3_000) { resolveSharedMetadata(context, media, "LOCATION", preferences)?.text }
+                    val date = resolveSharedMetadata(context, media, "DATE_TAKEN", preferences)?.text
+                    val detail = listOfNotNull(location, date).filter { it.isNotBlank() }.distinct().joinToString(" • ")
+                    val text =
+                        listOfNotNull(
+                            caption?.takeIf { it.isNotBlank() },
+                            detail.takeIf { it.isNotBlank() },
+                        ).distinct().joinToString("\n")
+                    if (text.isNotEmpty()) return ResolvedMetadata(text, emptyMap(), MetadataType.STATIC)
+                }
+
                 else -> {
                     val common = resolveSharedMetadata(context, media, entry, preferences)
                     if (common != null) {
@@ -150,14 +169,6 @@ internal class MetadataResolver(
                         )
                     }
 
-                    MediaLocationResolution.StopWithBlank -> {
-                        ResolvedMetadata(
-                            text = "",
-                            poi = emptyMap(),
-                            metadataType = MetadataType.STATIC,
-                        )
-                    }
-
                     is MediaLocationResolution.ContinueFallback -> {
                         null
                     }
@@ -189,7 +200,11 @@ internal class MetadataResolver(
             }
 
             "DESCRIPTION" -> {
-                media.metadata.exif.description
+                val krillCaption =
+                    media.metadata.shortDescription
+                        .takeIf { media.source == AerialMediaSource.KRILL && media.type == AerialMediaType.IMAGE }
+                        ?.let(KrillCaption::cleanLegacy)
+                (krillCaption?.takeIf { it.isNotBlank() } ?: media.metadata.exif.description)
                     ?.trim()
                     ?.takeIf { it.isNotBlank() }
                     ?.let {
@@ -333,11 +348,11 @@ internal class MetadataResolver(
             return MediaLocationResolution.ContinueFallback
         }
 
-        val location = geocoderHelper.reverseGeocode(context, latitude, longitude) ?: return MediaLocationResolution.StopWithBlank
+        val location = geocoderHelper.reverseGeocode(context, latitude, longitude) ?: return MediaLocationResolution.ContinueFallback
         val formatted = formatLocation(location, locationType)
 
         return if (formatted.isNullOrBlank()) {
-            MediaLocationResolution.StopWithBlank
+            MediaLocationResolution.ContinueFallback
         } else {
             MediaLocationResolution.Resolved(formatted)
         }
@@ -398,8 +413,6 @@ internal class MetadataResolver(
 
     private sealed class MediaLocationResolution {
         data object ContinueFallback : MediaLocationResolution()
-
-        data object StopWithBlank : MediaLocationResolution()
 
         data class Resolved(
             val text: String,

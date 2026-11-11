@@ -1,4 +1,41 @@
 <resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation" tools:locale="en">
+    <string name="frame_modes_title">Picture frame modes</string>
+    <string name="frame_art_cadence">Art in mixed mode</string>
+    <string name="frame_art_amount">Art amount (X)</string>
+    <string name="frame_art_invalid">Enter a whole number. Percent must be 0 to 100.</string>
+    <string name="frame_schedule_title">Schedule</string>
+    <string name="frame_schedule_summary">Shows the dashboard at set times; pictures play in between and outside these hours. Up or down overrides until the next scheduled change.</string>
+    <string name="frame_schedule_days">Dashboard days</string>
+    <string name="frame_schedule_days_summary">Clear every day to turn the schedule off.</string>
+    <string name="frame_schedule_start">Dashboard hours start (HH:mm)</string>
+    <string name="frame_schedule_end">Dashboard hours end (HH:mm)</string>
+    <string name="frame_schedule_interval">Show the dashboard every</string>
+    <string name="frame_schedule_duration">Keep the dashboard on screen for</string>
+    <string name="frame_mode_loading">Preparing picture modes</string>
+    <string name="frame_mode_unavailable">Picture modes are unavailable. Retrying in the background.</string>
+    <string name="frame_mode_photos">Photos</string>
+    <string name="frame_mode_art">Art</string>
+    <string name="frame_mode_mixed">Mixed</string>
+    <string name="frame_mode_dashboard">Dashboard</string>
+    <string name="frame_mode_empty">No matching pictures in this mode</string>
+    <string name="frame_dashboard_title">Dashboard</string>
+    <string name="frame_dashboard_url">Dashboard URL</string>
+    <string name="frame_dashboard_url_summary">Enter an HTTPS page. Up or down switches between the dashboard and pictures.</string>
+    <string name="frame_dashboard_invalid">Enter a valid HTTPS URL or time in HH:mm.</string>
+    <string name="krill_source_title">Krill photos</string>
+    <string name="krill_source_summary">Sign in to a private Krill library</string>
+    <string name="krill_library_title">Krill library address</string>
+    <string name="krill_library_summary">Enter the HTTPS address of your Krill library</string>
+    <string name="krill_sign_in">Sign in and choose a library</string>
+    <string name="krill_sign_out">Sign out of Krill</string>
+    <string name="krill_login_title">Sign in to Krill</string>
+    <string name="krill_login_instructions">On your phone, open %1$s and enter code %2$s.</string>
+    <string name="krill_choose_space">Choose a library</string>
+    <string name="krill_login_failed">Could not connect or sign in. Check the library address and try again.</string>
+    <string name="krill_no_spaces">This account has no Krill libraries.</string>
+    <string name="krill_login_success">Krill library connected.</string>
+    <string name="krill_signed_out">Signed out of Krill.</string>
+    <string name="krill_logout_failed">Sign-out cleanup is still pending. Try again.</string>
 
     <!-- General -->
     <string name="app_name" translatable="false">Aerial Views</string>
@@ -1006,4 +1043,22 @@
     <string name="about_version_title">Version</string>
     <string name="about_date_title">Build Date</string>
 
+    <string name="frame_photo_options">Photo options</string>
+    <string name="frame_video_options">Video options</string>
+    <string name="frame_video_unmute">Turn sound on</string>
+    <string name="frame_video_mute">Mute sound</string>
+    <string name="frame_video_music_active">Video sound is muted while background music plays</string>
+    <string name="frame_remove_from_rotation">Remove from this frame</string>
+    <string name="frame_remove_left_photo">Remove left photo from this frame</string>
+    <string name="frame_remove_right_photo">Remove right photo from this frame</string>
+    <string name="frame_split_pair">Show these photos separately</string>
+    <string name="frame_reset_pairing_choices">Reset collage choices</string>
+    <string name="frame_restore_rotation">Restore removed photos</string>
+    <string name="frame_restore_rotation_summary">Allow all photos removed from this frame to appear again.</string>
+    <string name="frame_photos_restored">Removed photos restored</string>
+    <string name="frame_start_on_boot">Start frame after device boots</string>
+    <string name="frame_start_on_boot_summary">Requires permission to appear over other apps on supported devices.</string>
+    <string name="frame_boot_permission_needed">Allow this app to appear over other apps in device settings.</string>
+    <string name="frame_offline">Offline</string>
+    <string name="frame_cancel">Cancel</string>
 </resources>

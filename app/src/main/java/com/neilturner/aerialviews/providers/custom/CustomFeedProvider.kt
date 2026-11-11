@@ -1,6 +1,8 @@
 package com.neilturner.aerialviews.providers.custom
 
 import android.content.Context
+import android.hardware.display.DisplayManager
+import android.view.Display
 import androidx.core.net.toUri
 import com.neilturner.aerialviews.data.network.JsonHelper
 import com.neilturner.aerialviews.data.network.UrlValidator
@@ -71,10 +73,14 @@ class CustomFeedProvider(
                 .build()
 
         val customFeedApi = retrofit.create(CustomFeedApi::class.java)
+        val privateOrigin =
+            runCatching {
+                KrillSessionManager(context).cachedSession()?.takeIf { it.spaceId != null }?.libraryOrigin
+            }.getOrNull()
 
         for (url in validUrls) {
             try {
-                Timber.d("Processing URL: $url")
+                Timber.d("Processing custom feed")
 
                 // Check if this is an RTSP stream
                 if (url.startsWith("rtsp://", ignoreCase = true)) {
@@ -88,6 +94,28 @@ class CustomFeedProvider(
                     continue
                 }
 
+                if (KrillFeed.matches(url)) {
+                    if (KrillFeed.privateFeedReplaces(url, privateOrigin)) {
+                        Timber.i("Using the signed-in Krill library instead of its public previews")
+                        continue
+                    }
+                    val mode =
+                        (context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager)
+                            .getDisplay(Display.DEFAULT_DISPLAY)
+                            ?.mode
+                    KrillFeed.fetch(okHttpClient, url, mode?.physicalWidth ?: 1920, mode?.physicalHeight ?: 1080).forEach { item ->
+                        videos.add(
+                            AerialMedia(
+                                item.url.toUri(),
+                                type = AerialMediaType.IMAGE,
+                                source = AerialMediaSource.KRILL,
+                                metadata = AerialMediaMetadata(shortDescription = item.description),
+                            ),
+                        )
+                    }
+                    continue
+                }
+
                 // Check if this is a CSV media list
                 if (isCsvUrl(url)) {
                     processCsvUrl(okHttpClient, url)
@@ -97,7 +125,7 @@ class CustomFeedProvider(
                 // Process as entries.json URL
                 processEntriesUrl(customFeedApi, url, quality)
             } catch (e: Exception) {
-                Timber.w(e, "Failed to process URL: $url")
+                Timber.w("Failed to process custom feed")
             }
         }
 
@@ -108,7 +136,7 @@ class CustomFeedProvider(
     }
 
     suspend fun fetchTest(): String {
-        Timber.i("Custom feed validation started. Raw URLs: ${prefs.urls}")
+        Timber.i("Custom feed validation started")
 
         // Step 1: Simple validation of URLs
         val simpleValidation = performSimpleValidation()
@@ -124,7 +152,7 @@ class CustomFeedProvider(
         prefs.urlsSummary = advancedValidation.summary
         Timber.i(
             "Custom feed validation finished. Has errors: ${advancedValidation.hasErrors}. " +
-                "Summary: ${advancedValidation.summary}. Cached URLs: ${prefs.urlsCache}",
+                "Summary: ${advancedValidation.summary}",
         )
         return advancedValidation.message
     }
@@ -143,7 +171,7 @@ class CustomFeedProvider(
         val invalidUrls = validationResults.filter { !it.first }
         Timber.d(
             "Custom feed format validation complete. Valid: ${validUrls.size}, " +
-                "invalid: ${invalidUrls.size}, results: $validationResults",
+                "invalid: ${invalidUrls.size}",
         )
 
         if (invalidUrls.isEmpty()) {
@@ -187,11 +215,13 @@ class CustomFeedProvider(
 
     private suspend fun performAdvancedValidation(): ValidationResult {
         val urls = UrlValidator.parseUrls(prefs.urls)
-        Timber.i("Custom feed advanced validation parsed ${urls.size} URL(s): $urls")
+        Timber.i("Custom feed advanced validation parsed ${urls.size} URL(s)")
         val validEntriesUrls = mutableListOf<String>()
         val validRtspUrls = mutableListOf<String>()
         val validHlsUrls = mutableListOf<String>()
         val validCsvUrls = mutableListOf<String>()
+        val validKrillUrls = mutableListOf<String>()
+        var totalKrillPhotos = 0
         val errorMessages = mutableMapOf<String, String>()
 
         val okHttpClient =
@@ -213,40 +243,51 @@ class CustomFeedProvider(
 
         for (url in urls) {
             try {
-                Timber.d("Testing URL: $url")
+                Timber.d("Testing custom feed")
 
                 // Check if this is an RTSP stream
                 if (url.startsWith("rtsp://", ignoreCase = true)) {
                     validRtspUrls.add(url)
-                    Timber.i("Valid RTSP stream: $url")
+                    Timber.i("Valid RTSP stream")
                     continue
                 }
 
                 // Check if this is an HLS stream
                 if (url.endsWith(".m3u8", ignoreCase = true) || url.contains(".m3u8?", ignoreCase = true)) {
                     validHlsUrls.add(url)
-                    Timber.i("Valid HLS stream: $url")
+                    Timber.i("Valid HLS stream")
+                    continue
+                }
+
+                if (KrillFeed.matches(url)) {
+                    val items = KrillFeed.fetch(okHttpClient, url)
+                    if (items.isNotEmpty()) {
+                        validKrillUrls.add(url)
+                        totalKrillPhotos += items.size
+                    } else {
+                        errorMessages[url] = "Krill feed contains no photos"
+                    }
                     continue
                 }
 
                 // Check if this is a CSV media list
                 if (isCsvUrl(url)) {
-                    Timber.i("Custom feed URL detected as CSV: $url")
+                    Timber.i("Custom feed detected as CSV")
                     try {
                         val csvItems = fetchCsvMediaItems(okHttpClient, url)
                         if (csvItems.isNotEmpty()) {
                             validCsvUrls.add(url)
                             Timber.i(
-                                "Found ${csvItems.size} media items in CSV: $url. " +
+                                "Found ${csvItems.size} media items in CSV. " +
                                     "Videos: ${csvItems.count { it.type == AerialMediaType.VIDEO }}, ",
                             )
                         } else {
                             errorMessages[url] = "CSV contains no supported media items"
-                            Timber.w("CSV parsed successfully but contained no supported media items: $url")
+                            Timber.w("CSV parsed successfully but contained no supported media items")
                         }
                     } catch (e: Exception) {
                         errorMessages[url] = "Failed to parse CSV: ${e.message}"
-                        Timber.w(e, "CSV validation failed for URL: $url")
+                        Timber.w("CSV validation failed")
                     }
                     continue
                 }
@@ -259,7 +300,7 @@ class CustomFeedProvider(
                         val photoCount = customVideos.photos?.size ?: 0
                         if (videoCount + photoCount > 0) {
                             validEntriesUrls.add(url)
-                            Timber.i("Found $videoCount videos and $photoCount photos in entries.json: $url")
+                            Timber.i("Found $videoCount videos and $photoCount photos in entries.json")
                         } else {
                             errorMessages[url] = "entries.json contains no media"
                         }
@@ -282,12 +323,12 @@ class CustomFeedProvider(
                 val entriesUrls = tryParseAsManifest(customFeedApi, testUrl)
                 if (entriesUrls.isNotEmpty()) {
                     validEntriesUrls.addAll(entriesUrls)
-                    Timber.i("Found ${entriesUrls.size} entries URLs from manifest: $testUrl")
+                    Timber.i("Found ${entriesUrls.size} entries URLs from manifest")
                 } else {
                     errorMessages[url] = "URL does not contain a valid manifest.json"
                 }
             } catch (e: Exception) {
-                Timber.w(e, "Failed to test URL: $url")
+                Timber.w("Failed to test custom feed")
                 errorMessages[url] = e.message ?: "Unknown error"
             }
         }
@@ -302,9 +343,9 @@ class CustomFeedProvider(
                 val photoCount = customVideos.photos?.size ?: 0
                 totalVideos += videoCount
                 totalPhotos += photoCount
-                Timber.d("Found $videoCount videos and $photoCount photos in $entriesUrl")
+                Timber.d("Found $videoCount videos and $photoCount photos in custom feed")
             } catch (e: Exception) {
-                Timber.w(e, "Failed to count media from: $entriesUrl")
+                Timber.w("Failed to count media from custom feed")
             }
         }
         var totalCsvVideos = 0
@@ -314,17 +355,17 @@ class CustomFeedProvider(
                 val csvItems = fetchCsvMediaItems(okHttpClient, csvUrl)
                 totalCsvVideos += csvItems.count { it.type == AerialMediaType.VIDEO }
                 totalCsvPhotos += csvItems.count { it.type == AerialMediaType.IMAGE }
-                Timber.d("Found ${csvItems.size} media items in $csvUrl")
+                Timber.d("Found ${csvItems.size} media items in CSV")
             } catch (e: Exception) {
-                Timber.w(e, "Failed to count media items from: $csvUrl")
+                Timber.w("Failed to count media items from CSV")
             }
         }
         totalVideos += totalCsvVideos
-        totalPhotos += totalCsvPhotos
+        totalPhotos += totalCsvPhotos + totalKrillPhotos
 
         // Save valid URLs to cache
         val allValidUrls =
-            (validEntriesUrls + validRtspUrls + validHlsUrls + validCsvUrls)
+            (validEntriesUrls + validRtspUrls + validHlsUrls + validCsvUrls + validKrillUrls)
                 .joinToString(",")
         prefs.urlsCache = allValidUrls
         Timber.i(
@@ -336,7 +377,8 @@ class CustomFeedProvider(
         if (validEntriesUrls.isNotEmpty() ||
             validRtspUrls.isNotEmpty() ||
             validHlsUrls.isNotEmpty() ||
-            validCsvUrls.isNotEmpty()
+            validCsvUrls.isNotEmpty() ||
+            validKrillUrls.isNotEmpty()
         ) {
             val message =
                 buildString {
@@ -357,6 +399,9 @@ class CustomFeedProvider(
                     if (validCsvUrls.isNotEmpty()) {
                         append("• ${validCsvUrls.size} CSV media lists\n")
                     }
+                    if (validKrillUrls.isNotEmpty()) {
+                        append("• ${validKrillUrls.size} Krill libraries\n")
+                    }
                     if (totalPhotos > 0) {
                         append("• $totalPhotos photos found\n")
                     }
@@ -369,7 +414,7 @@ class CustomFeedProvider(
                     }
                 }
 
-            val totalUrls = validEntriesUrls.size + validRtspUrls.size + validHlsUrls.size + validCsvUrls.size
+            val totalUrls = validEntriesUrls.size + validRtspUrls.size + validHlsUrls.size + validCsvUrls.size + validKrillUrls.size
             val summary =
                 buildString {
                     append("$totalUrls URL${if (totalUrls != 1) "s" else ""}: ")
@@ -440,10 +485,10 @@ class CustomFeedProvider(
             val manifestUrls = mutableListOf<String>()
             try {
                 val manifest = apiService.getManifest(url)
-                Timber.i("Manifest name: ${manifest.name}")
+                Timber.i("Custom feed manifest found")
                 manifestUrls.add(manifest.manifestUrl)
             } catch (e: Exception) {
-                Timber.d("URL is not a manifest format: $url - ${e.message}")
+                Timber.d("Custom feed is not a manifest format")
             }
 
             try {
@@ -452,13 +497,13 @@ class CustomFeedProvider(
                 manifests.sources.forEach { source ->
                     if (source.manifestUrl.isNotBlank()) {
                         entriesUrls.add(source.manifestUrl)
-                        Timber.d("Found manifest entry: ${source.name} -> ${source.manifestUrl}")
+                        Timber.d("Found manifest entry")
                     }
                 }
 
                 manifestUrls.addAll(entriesUrls)
             } catch (e: Exception) {
-                Timber.d("URL is not a manifest list format: $url - ${e.message}")
+                Timber.d("Custom feed is not a manifest list format")
             }
 
             return@withContext manifestUrls
@@ -528,10 +573,10 @@ class CustomFeedProvider(
 
                 Timber.d(
                     "Processed ${customVideos.assets?.size ?: 0} videos and " +
-                        "${customVideos.photos?.size ?: 0} photos from $url",
+                        "${customVideos.photos?.size ?: 0} photos from custom feed",
                 )
             } catch (e: Exception) {
-                Timber.w(e, "Failed to parse entries from URL: $url")
+                Timber.w("Failed to parse custom feed entries")
             }
         }
     }
@@ -559,9 +604,9 @@ class CustomFeedProvider(
                     )
                 }
 
-                Timber.d("Processed ${csvItems.size} media items from CSV $url")
+                Timber.d("Processed ${csvItems.size} media items from CSV")
             } catch (e: Exception) {
-                Timber.w(e, "Failed to parse CSV from URL: $url")
+                Timber.w("Failed to parse CSV")
             }
         }
     }
@@ -571,13 +616,13 @@ class CustomFeedProvider(
         url: String,
     ): List<CustomFeedCsvParser.CsvMediaItem> =
         withContext(Dispatchers.IO) {
-            Timber.i("Fetching custom feed CSV: $url")
+            Timber.i("Fetching custom feed CSV")
             val request = Request.Builder().url(url).build()
             okHttpClient.newCall(request).execute().use { response ->
                 val contentType = response.body.contentType()
                 val contentLength = response.body.contentLength()
                 Timber.i(
-                    "Custom feed CSV response for $url: HTTP ${response.code}, " +
+                    "Custom feed CSV response: HTTP ${response.code}, " +
                         "contentType=$contentType, contentLength=$contentLength",
                 )
                 if (!response.isSuccessful) {
@@ -585,40 +630,22 @@ class CustomFeedProvider(
                 }
                 val body = response.body.string()
                 Timber.d(
-                    "Custom feed CSV body received from $url: chars=${body.length}, " +
-                        "lines=${body.lineSequence().count()}, preview=${body.logPreview()}",
+                    "Custom feed CSV body received: chars=${body.length}, " +
+                        "lines=${body.lineSequence().count()}",
                 )
                 val items = CustomFeedCsvParser.parse(body)
                 Timber.i(
-                    "Custom feed CSV parse result for $url: items=${items.size}, " +
+                    "Custom feed CSV parse result: items=${items.size}, " +
                         "videos=${items.count { it.type == AerialMediaType.VIDEO }}, ",
                 )
-                items.take(5).forEachIndexed { index, item ->
-                    Timber.d(
-                        "Custom feed CSV item ${index + 1} for $url: " +
-                            "type=${item.type}, mediaUrl=${item.url}, description=${item.description}",
-                    )
-                }
-                if (items.size > 5) {
-                    Timber.d("Custom feed CSV item log truncated for $url. Remaining items: ${items.size - 5}")
-                }
                 return@withContext items
             }
         }
 
-    private fun String.logPreview(maxLength: Int = 300): String {
-        val singleLine = replace(Regex("\\s+"), " ").trim()
-        return if (singleLine.length <= maxLength) {
-            singleLine
-        } else {
-            "${singleLine.take(maxLength)}..."
-        }
-    }
-
     private suspend fun processRtspStream(url: String) {
         withContext(Dispatchers.IO) {
             try {
-                Timber.i("Processing RTSP stream: $url")
+                Timber.i("Processing RTSP stream")
 
                 // Add RTSP stream directly as a video
                 // RTSP streams don't have time of day or scene metadata, so we add them without filtering
@@ -645,9 +672,9 @@ class CustomFeedProvider(
                     )
                 metadata[url] = data
 
-                Timber.d("Added RTSP stream: $url")
+                Timber.d("Added RTSP stream")
             } catch (e: Exception) {
-                Timber.w(e, "Failed to process RTSP stream: $url")
+                Timber.w("Failed to process RTSP stream")
             }
         }
     }
@@ -655,7 +682,7 @@ class CustomFeedProvider(
     private suspend fun processHlsStream(url: String) {
         withContext(Dispatchers.IO) {
             try {
-                Timber.i("Processing HLS stream: $url")
+                Timber.i("Processing HLS stream")
 
                 val uri = url.toUri()
                 videos.add(
@@ -679,9 +706,9 @@ class CustomFeedProvider(
                     )
                 metadata[url] = data
 
-                Timber.d("Added HLS stream: $url")
+                Timber.d("Added HLS stream")
             } catch (e: Exception) {
-                Timber.w(e, "Failed to process HLS stream: $url")
+                Timber.w("Failed to process HLS stream")
             }
         }
     }

@@ -39,5 +39,9 @@
             app:dependency="playlist_cache"
             app:title="@string/playlist_cache_status_title"
             app:summary="@string/playlist_cache_status_unknown" />
+        <Preference
+            app:key="restore_frame_photos"
+            app:title="@string/frame_restore_rotation"
+            app:summary="@string/frame_restore_rotation_summary" />
     </PreferenceCategory>
 </PreferenceScreen>

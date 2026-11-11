@@ -1,11 +1,19 @@
 package com.neilturner.aerialviews.models
 
+import com.neilturner.aerialviews.BuildConfig
 import com.neilturner.aerialviews.models.videos.AerialMedia
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import timber.log.Timber
+
+/** A window was repeatedly superseded before it could be published; retry the same position. */
+internal class MediaPlaylistContentionException : RuntimeException()
+
+internal class MediaPlaylistFetchException : RuntimeException()
 
 /**
  * A cycling media playlist backed by a sliding window of items.
@@ -22,6 +30,7 @@ class MediaPlaylist(
     size: Int = initialVideos.size,
     private var windowOffset: Int = 0,
     private val fetchChunk: (suspend (offset: Int, limit: Int) -> List<AerialMedia>)? = null,
+    private val countSource: (suspend () -> Int?)? = null,
 ) {
     private var position = startPosition
 
@@ -40,9 +49,157 @@ class MediaPlaylist(
     /** Monotonic guard so a slow refill cannot overwrite a newer window. Guarded by [windowLock]. */
     private var refillGeneration = 0
 
+    @Volatile internal var metadataRevision: Long = 0
+        private set
+
     val currentPosition: Int get() = position
 
+    /** Move to a known fixture in a debug build without changing the cached rotation. */
+    internal fun debugSeekTo(position: Int) {
+        check(BuildConfig.DEBUG)
+        require(position in -1 until servableSize)
+        this.position = position
+    }
+
     val size: Int get() = servableSize
+
+    /** Publish an appended source size without moving the current cursor or reviving stale refills. */
+    suspend fun refreshAppendedSourceSize() {
+        val count = countSource?.invoke() ?: return
+        synchronized(windowLock) {
+            if (count > servableSize) {
+                refillGeneration++
+                metadataRevision++
+                servableSize = count
+            }
+        }
+    }
+
+    /** Append already-authorized media to an in-memory rotation. */
+    fun appendUncachedKrillMedia(fresh: List<AerialMedia>) {
+        synchronized(windowLock) {
+            if (fetchChunk != null) return
+            val known = windowVideos.mapTo(mutableSetOf()) { it.uri.toString() }
+            val added =
+                fresh.filter {
+                    it.source == com.neilturner.aerialviews.models.enums.AerialMediaSource.KRILL && known.add(it.uri.toString())
+                }
+            if (added.isNotEmpty()) {
+                windowVideos.addAll(added)
+                servableSize = windowVideos.size
+                metadataRevision++
+            }
+        }
+    }
+
+    internal fun restoreCursor(position: Int): Boolean {
+        if (position !in -1 until servableSize) return false
+        this.position = position
+        return true
+    }
+
+    /** Inspect an absolute position without moving the playback cursor. */
+    fun itemAt(index: Int): AerialMedia? = if (index in 0 until servableSize) getItemAt(index) else null
+
+    /** Read an ordered projection without moving the playback cursor or replacing its window. */
+    internal suspend fun <T> snapshotProjection(project: (AerialMedia) -> T): List<T> {
+        val expected = servableSize
+        val loader = fetchChunk
+        if (loader == null) {
+            return synchronized(windowLock) {
+                check(windowOffset == 0 && windowVideos.size == expected) { "Incomplete in-memory playlist" }
+                windowVideos.map(project)
+            }
+        }
+        val result = ArrayList<T>(expected)
+        while (result.size < expected) {
+            currentCoroutineContext().ensureActive()
+            val count = minOf(100, expected - result.size)
+            val chunk = loader(result.size, count)
+            check(chunk.size == count && servableSize == expected) { "Playlist changed while building mode index" }
+            result.addAll(chunk.map(project))
+        }
+        return result
+    }
+
+    /** Refresh metadata of items already in the window without changing their order or position. */
+    fun updateCachedMetadata(fresh: List<AerialMedia>) {
+        val byUri = fresh.associateBy { it.uri.toString() }
+        synchronized(windowLock) {
+            refillGeneration++
+            metadataRevision++
+            windowVideos.forEach { cached ->
+                val updated = byUri[cached.uri.toString()] ?: return@forEach
+                if (cached.source != com.neilturner.aerialviews.models.enums.AerialMediaSource.KRILL) return@forEach
+                cached.metadata.width = cached.metadata.width ?: updated.metadata.width
+                cached.metadata.height = cached.metadata.height ?: updated.metadata.height
+                cached.metadata.tags = updated.metadata.tags
+                cached.metadata.tagsKnown = true
+            }
+        }
+    }
+
+    fun updateCachedCaptions(fresh: List<AerialMedia>) {
+        val captions = fresh.associate { it.uri.toString() to it.metadata.shortDescription }
+        synchronized(windowLock) {
+            refillGeneration++
+            windowVideos.forEach { cached ->
+                if (cached.source == com.neilturner.aerialviews.models.enums.AerialMediaSource.KRILL) {
+                    captions[cached.uri.toString()]?.let { cached.metadata.shortDescription = it }
+                }
+            }
+        }
+    }
+
+    /**
+     * Apply fresh feed pairing, focus and tags (an art mark can change after upload). [storeChanged] reports that
+     * cached rows outside the window changed, so the frame mode index must be rebuilt.
+     */
+    fun updateCachedPairing(
+        fresh: List<AerialMedia>,
+        storeChanged: Boolean = false,
+    ) {
+        val byUri = fresh.associateBy { it.uri.toString() }
+        synchronized(windowLock) {
+            refillGeneration++
+            var tagsChanged = storeChanged
+            windowVideos.forEach { cached ->
+                val updated = byUri[cached.uri.toString()] ?: return@forEach
+                if (cached.source != com.neilturner.aerialviews.models.enums.AerialMediaSource.KRILL) return@forEach
+                cached.metadata.pairPartner = updated.metadata.pairPartner
+                cached.metadata.pairThird = updated.metadata.pairThird
+                cached.metadata.focusRevision = updated.metadata.focusRevision
+                cached.metadata.focusX = updated.metadata.focusX
+                cached.metadata.focusY = updated.metadata.focusY
+                if (!cached.metadata.tagsKnown || cached.metadata.tags != updated.metadata.tags) {
+                    cached.metadata.tags = updated.metadata.tags
+                    cached.metadata.tagsKnown = true
+                    tagsChanged = true
+                }
+            }
+            if (tagsChanged) metadataRevision++
+        }
+    }
+
+    /** Discard any window fetched before the metadata commit and check the current window. */
+    fun invalidateRefillsAndNeedsCachedMetadata(eligible: (AerialMedia) -> Boolean): Boolean =
+        synchronized(windowLock) {
+            refillGeneration++
+            windowVideos.any { eligible(it) && !it.metadata.tagsKnown }
+        }
+
+    /** Return the next eligible item already in the window without changing playback position. */
+    fun peekNextItem(eligible: (AerialMedia) -> Boolean): AerialMedia? =
+        synchronized(windowLock) {
+            if (servableSize == 0) return@synchronized null
+            for (step in 1..minOf(servableSize, windowVideos.size)) {
+                val index = calculateNext(position + step) - windowOffset
+                if (index !in windowVideos.indices) return@synchronized null
+                val item = windowVideos[index]
+                if (eligible(item)) return@synchronized item
+            }
+            null
+        }
 
     fun nextItem(): AerialMedia? {
         if (servableSize == 0) {
@@ -50,14 +207,20 @@ class MediaPlaylist(
             return null
         }
 
-        position = calculateNext(++position)
-        Timber.v("MediaPlaylist: nextItem() -> pos $position / $size (window: $windowSize)")
-        checkAndRefillWindow()
-
-        // A refill may have discovered the chunk source is shorter than declared, so re-wrap
-        // before resolving rather than serving an index the source cannot produce.
-        position = calculateNext(position)
-        return getItemAt(position) ?: skipForward()
+        val original = position
+        try {
+            position = calculateNext(++position)
+            Timber.v("MediaPlaylist: nextItem() -> pos $position / $size (window: $windowSize)")
+            checkAndRefillWindow()
+            position = calculateNext(position)
+            return getItemAt(position) ?: skipForward()
+        } catch (contention: MediaPlaylistContentionException) {
+            position = original
+            throw contention
+        } catch (failure: MediaPlaylistFetchException) {
+            position = original
+            throw failure
+        }
     }
 
     fun previousItem(): AerialMedia? {
@@ -66,12 +229,20 @@ class MediaPlaylist(
             return null
         }
 
-        position = calculateNext(--position)
-        Timber.v("MediaPlaylist: previousItem() -> pos $position / $size (window: $windowSize)")
-        checkAndRefillWindow()
-
-        position = calculateNext(position)
-        return getItemAt(position) ?: skipForward()
+        val original = position
+        try {
+            position = calculateNext(--position)
+            Timber.v("MediaPlaylist: previousItem() -> pos $position / $size (window: $windowSize)")
+            checkAndRefillWindow()
+            position = calculateNext(position)
+            return getItemAt(position) ?: skipForward()
+        } catch (contention: MediaPlaylistContentionException) {
+            position = original
+            throw contention
+        } catch (failure: MediaPlaylistFetchException) {
+            position = original
+            throw failure
+        }
     }
 
     /**
@@ -160,7 +331,15 @@ class MediaPlaylist(
             "MediaPlaylist: Refilling window. Position: $position, New Offset: ${plan.newOffset}",
         )
         scope.launch {
-            val freshData = fetchChunk.invoke(plan.newOffset, WINDOW_LIMIT)
+            val freshData =
+                try {
+                    fetchChunk.invoke(plan.newOffset, WINDOW_LIMIT)
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    Timber.w("MediaPlaylist: Background window refill failed")
+                    return@launch
+                }
             synchronized(windowLock) {
                 if (generation != refillGeneration) {
                     Timber.d(
@@ -181,26 +360,35 @@ class MediaPlaylist(
 
     private fun refillWindowSync(newOffset: Int) {
         val chunkFetcher = fetchChunk ?: return
-
-        val freshData =
-            try {
-                runBlocking(Dispatchers.IO) {
-                    chunkFetcher.invoke(newOffset, WINDOW_LIMIT)
+        repeat(2) {
+            val generation = synchronized(windowLock) { ++refillGeneration }
+            val freshData =
+                try {
+                    runBlocking(Dispatchers.IO) {
+                        chunkFetcher.invoke(newOffset, WINDOW_LIMIT)
+                    }
+                } catch (e: Exception) {
+                    Timber.e(e, "MediaPlaylist: Error refilling window at offset $newOffset")
+                    throw MediaPlaylistFetchException()
                 }
-            } catch (e: Exception) {
-                Timber.e(e, "MediaPlaylist: Error refilling window at offset $newOffset")
-                return
-            }
 
-        synchronized(windowLock) {
-            // Invalidate any async refill still in flight so it cannot clobber this window.
-            refillGeneration++
-            recordSourceEnd(newOffset, freshData.size)
-            windowOffset = newOffset
-            windowVideos.clear()
-            windowVideos.addAll(freshData)
-            Timber.d("MediaPlaylist: Window refilled synchronously. New range: $newOffset..${newOffset + freshData.size}")
+            val applied =
+                synchronized(windowLock) {
+                    if (generation != refillGeneration) {
+                        Timber.d("MediaPlaylist: Discarding stale synchronous window refill")
+                        false
+                    } else {
+                        recordSourceEnd(newOffset, freshData.size)
+                        windowOffset = newOffset
+                        windowVideos.clear()
+                        windowVideos.addAll(freshData)
+                        Timber.d("MediaPlaylist: Window refilled synchronously. New range: $newOffset..${newOffset + freshData.size}")
+                        true
+                    }
+                }
+            if (applied) return
         }
+        throw MediaPlaylistContentionException()
     }
 
     /**

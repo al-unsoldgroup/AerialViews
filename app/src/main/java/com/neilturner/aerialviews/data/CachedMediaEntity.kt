@@ -27,4 +27,13 @@ data class CachedMediaEntity(
     val exifCountry: String?,
     val exifDescription: String?,
     val audioUri: String? = null,
+    val width: Int? = null,
+    val height: Int? = null,
+    val tagsJson: String? = null,
+    val pairedWithNext: Boolean? = null,
+    val pairPartner: String? = null,
+    val pairThird: String? = null,
+    val focusRevision: Long? = null,
+    val focusX: Float? = null,
+    val focusY: Float? = null,
 )

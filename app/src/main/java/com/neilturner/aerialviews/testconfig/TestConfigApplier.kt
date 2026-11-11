@@ -91,6 +91,7 @@ object TestConfigApplier {
     private fun applyGeneral(general: GeneralConfig) {
         general.playlistCache?.let { GeneralPrefs.playlistCache = it }
         general.startScreensaverOnLaunch?.let { GeneralPrefs.startScreensaverOnLaunch = it }
+        general.startFrameOnBoot?.let { GeneralPrefs.startFrameOnBoot = it }
         general.shuffleVideos?.let { GeneralPrefs.shuffleVideos = it }
         general.autoTimeOfDay?.let { GeneralPrefs.autoTimeOfDay = it }
         general.wifiOnly?.let { GeneralPrefs.wifiOnly = it }

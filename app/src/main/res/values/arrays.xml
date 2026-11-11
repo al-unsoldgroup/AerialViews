@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string-array name="frame_art_cadence_entries"><item>X percent of slides</item><item>One in every X slides</item><item>Every X minutes</item></string-array>
+    <string-array name="frame_art_cadence_values" translatable="false"><item>PERCENT</item><item>SLIDES</item><item>MINUTES</item></string-array>
+    <string-array name="frame_schedule_days_entries"><item>Monday</item><item>Tuesday</item><item>Wednesday</item><item>Thursday</item><item>Friday</item><item>Saturday</item><item>Sunday</item></string-array>
+    <string-array name="frame_schedule_days_values" translatable="false"><item>1</item><item>2</item><item>3</item><item>4</item><item>5</item><item>6</item><item>7</item></string-array>
+    <string-array name="frame_schedule_days_default" translatable="false"><item>1</item><item>2</item><item>3</item><item>4</item><item>5</item></string-array>
+    <string-array name="frame_schedule_interval_entries"><item>Stay on all hours</item><item>2 minutes</item><item>5 minutes</item><item>10 minutes</item><item>15 minutes</item><item>30 minutes</item><item>60 minutes</item></string-array>
+    <string-array name="frame_schedule_interval_values" translatable="false"><item>0</item><item>2</item><item>5</item><item>10</item><item>15</item><item>30</item><item>60</item></string-array>
+    <string-array name="frame_schedule_duration_entries"><item>1 minute</item><item>2 minutes</item><item>3 minutes</item><item>5 minutes</item><item>10 minutes</item></string-array>
+    <string-array name="frame_schedule_duration_values" translatable="false"><item>1</item><item>2</item><item>3</item><item>5</item><item>10</item></string-array>
     <!-- Apple Video Options -->
     <string-array name="apple_videos_quality_entries" translatable="false">
         <item>1080p H.264</item>
@@ -1570,10 +1579,8 @@
         <item>BOTTOM_LEFT</item>
         <item>BOTTOM_RIGHT</item>
     </string-array>
+    <!-- Only the caption corner fades by default; the clock stays. -->
     <string-array name="overlay_fade_corners_default" translatable="false">
-        <item>TOP_LEFT</item>
-        <item>TOP_RIGHT</item>
-        <item>BOTTOM_LEFT</item>
         <item>BOTTOM_RIGHT</item>
     </string-array>
 
@@ -1613,6 +1620,7 @@
     </string-array>
     <string name="overlay_metadata_videos_default" translatable="false">POI</string>
 
+    <string name="overlay_meta_photo_context">Caption, location and date</string>
     <string name="overlay_meta_photo_location">Location (EXIF/Immich/NC Memories)</string>
     <string name="overlay_meta_photo_date">Date taken (EXIF/Immich/NC Memories)</string>
     <string name="overlay_meta_photo_description">Description (EXIF/Immich/NC Memories)</string>
@@ -1621,6 +1629,7 @@
     <string name="overlay_meta_photo_folder_filename">Folder &amp; filename</string>
     <string name="overlay_meta_photo_folder_only">Folder name only</string>
     <string-array name="overlay_metadata_photos_entries" translatable="false">
+        <item>@string/overlay_meta_photo_context</item>
         <item>@string/overlay_meta_photo_location</item>
         <item>@string/overlay_meta_photo_date</item>
         <item>@string/overlay_meta_photo_description</item>
@@ -1630,6 +1639,7 @@
         <item>@string/overlay_meta_photo_folder_only</item>
     </string-array>
     <string-array name="overlay_metadata_photos_values" translatable="false">
+        <item>PHOTO_CONTEXT</item>
         <item>LOCATION</item>
         <item>DATE_TAKEN</item>
         <item>DESCRIPTION</item>
@@ -1638,7 +1648,7 @@
         <item>FOLDER_FILENAME</item>
         <item>FOLDER_ONLY</item>
     </string-array>
-    <string name="overlay_metadata_photos_default" translatable="false">LOCATION,DATE_TAKEN,DESCRIPTION</string>
+    <string name="overlay_metadata_photos_default" translatable="false">PHOTO_CONTEXT,DESCRIPTION,LOCATION,DATE_TAKEN</string>
 
     <string name="overlay_meta_loc_city">City</string>
     <string name="overlay_meta_loc_city_state">City, State</string>

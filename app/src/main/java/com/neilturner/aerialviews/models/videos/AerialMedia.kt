@@ -22,6 +22,17 @@ data class AerialMediaMetadata(
     var exif: AerialExifMetadata = AerialExifMetadata(),
     var albumName: String = "",
     var title: String = "",
+    var width: Int? = null,
+    var height: Int? = null,
+    var tags: List<String> = emptyList(),
+    var tagsKnown: Boolean = false,
+    var pairedWithNext: Boolean? = null,
+    /** Krill media ID of the server-chosen collage partner. */
+    var pairPartner: String? = null,
+    var pairThird: String? = null,
+    var focusRevision: Long? = null,
+    var focusX: Float? = null,
+    var focusY: Float? = null,
 )
 
 data class AerialExifMetadata(

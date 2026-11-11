@@ -243,6 +243,9 @@ dependencies {
     testImplementation(libs.ktor.client.content.negotiation)
     testRuntimeOnly(libs.junit.jupiter.engine)
 
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.runner)
+
     implementation(libs.profileinstaller)
     "baselineProfile"(project(":baselineprofile"))
     implementation(project(":projectivyapi"))

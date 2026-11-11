@@ -28,6 +28,7 @@ data class TestConfig(
 data class GeneralConfig(
     val playlistCache: Boolean? = null,
     val startScreensaverOnLaunch: Boolean? = null,
+    val startFrameOnBoot: Boolean? = null,
     val shuffleVideos: Boolean? = null,
     val autoTimeOfDay: Boolean? = null,
     val wifiOnly: Boolean? = null,

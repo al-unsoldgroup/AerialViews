@@ -31,6 +31,7 @@ class MusicPlayer(
         )
 
     private var shouldPlay = false
+    val isPlaybackRequested: Boolean get() = shouldPlay
     private var startTrackIndex = 0
     private var lastKnownTrackIndex = 0
     private var consecutiveErrors = 0

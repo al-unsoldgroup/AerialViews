@@ -38,6 +38,10 @@
 
     <PreferenceCategory app:title="@string/category_network">
         <Preference
+            app:title="@string/krill_source_title"
+            app:summary="@string/krill_source_summary"
+            app:fragment="com.neilturner.aerialviews.ui.sources.KrillFragment"/>
+        <Preference
             app:title="@string/sources_samba_title"
             app:summary="@string/sources_samba_summary"
             app:fragment="com.neilturner.aerialviews.ui.sources.SambaVideosFragment"/>

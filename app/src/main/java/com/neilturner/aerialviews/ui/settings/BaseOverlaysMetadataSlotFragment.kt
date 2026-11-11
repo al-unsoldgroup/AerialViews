@@ -62,7 +62,8 @@ abstract class BaseOverlaysMetadataSlotFragment : MenuStateFragment() {
     private fun updateConditionalPreferenceVisibility(sharedPreferences: SharedPreferences) {
         val videoSelection = sharedPreferences.getString(prefKeyVideoSelection, "").orEmpty()
         val photoSelection = sharedPreferences.getString(prefKeyPhotoSelection, "").orEmpty()
-        val showDatePrefs = containsFieldValue(photoSelection, dateTakenFieldValue)
+        val showContextPrefs = containsFieldValue(photoSelection, "PHOTO_CONTEXT")
+        val showDatePrefs = showContextPrefs || containsFieldValue(photoSelection, dateTakenFieldValue)
         val dateType = getDateType()
 
         findPreference<ListPreference>(prefKeyVideoFolderLevel)
@@ -72,7 +73,7 @@ abstract class BaseOverlaysMetadataSlotFragment : MenuStateFragment() {
         findPreference<ListPreference>(prefKeyPhotoFolderLevel)
             ?.isVisible = containsFolderLevelValue(photoSelection)
         findPreference<ListPreference>(prefKeyPhotoLocationType)
-            ?.isVisible = containsFieldValue(photoSelection, locationFieldValue)
+            ?.isVisible = showContextPrefs || containsFieldValue(photoSelection, locationFieldValue)
         findPreference<ListPreference>(prefKeyPhotoDateType)
             ?.isVisible = showDatePrefs
         findPreference<EditTextPreference>(prefKeyPhotoDateCustom)

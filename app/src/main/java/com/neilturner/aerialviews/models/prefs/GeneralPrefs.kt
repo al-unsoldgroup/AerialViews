@@ -15,11 +15,59 @@ import com.neilturner.aerialviews.models.enums.PlaylistAudioMode
 import com.neilturner.aerialviews.models.enums.ProgressBarLocation
 import com.neilturner.aerialviews.models.enums.ProgressBarType
 import com.neilturner.aerialviews.models.enums.VideoScale
+import com.neilturner.aerialviews.providers.custom.KrillCaption
 import com.neilturner.aerialviews.services.weather.TemperatureUnit
 import com.neilturner.aerialviews.services.weather.WindSpeedUnit
+import com.neilturner.aerialviews.ui.core.DashboardConfig
 
 object GeneralPrefs : KotprefModel() {
     override val kotprefName = "${context.packageName}_preferences"
+
+    var dashboardUrl by stringPref("", "frame_dashboard_url")
+    val frameScheduleDays by stringSetPref("frame_schedule_days") { (1..5).map(Int::toString).toSortedSet() }
+    var frameScheduleStart by stringPref("07:00", "frame_schedule_start")
+    var frameScheduleEnd by stringPref("18:00", "frame_schedule_end")
+    var frameScheduleInterval by stringPref("5", "frame_schedule_interval")
+    var frameScheduleDuration by stringPref("1", "frame_schedule_duration")
+    var frameArtCadence by stringPref("PERCENT", "frame_art_cadence")
+    var frameArtAmount by stringPref("30", "frame_art_amount")
+
+    /**
+     * Once per install, lead every saved photo-metadata selection with PHOTO_CONTEXT, so Krill photos
+     * show their caption (place and time, or artwork) instead of a bare compact DATE_TAKEN. Unsaved
+     * selections already use the default, and overlay slots such as the clock are untouched.
+     */
+    fun migrateKrillCaptionOverlays() = KrillCaption.migrateOverlayPrefs(preferences)
+
+    /**
+     * Moves the old single dashboard window and art percentage to the schedule settings. A real
+     * window keeps its times on every day with the dashboard up throughout, as before; the old
+     * disabled default (equal times) takes the new weekday default. Only a changed art percentage
+     * is kept, so the old 50 default becomes the new 30 default.
+     */
+    fun migrateFrameSchedule() {
+        val prefs = preferences
+        val oldKeys = listOf("frame_dashboard_start", "frame_dashboard_end", "frame_art_percent")
+        if (oldKeys.none(prefs::contains)) return
+        val start = prefs.getString("frame_dashboard_start", null)
+        val end = prefs.getString("frame_dashboard_end", null)
+        val percent = prefs.getString("frame_art_percent", null)
+        val edit = prefs.edit()
+        if (start != null && end != null && start != end && DashboardConfig.parseTime(start) != null &&
+            DashboardConfig.parseTime(end) != null
+        ) {
+            edit
+                .putStringSet("frame_schedule_days", (1..7).map(Int::toString).toSet())
+                .putString("frame_schedule_start", start)
+                .putString("frame_schedule_end", end)
+                .putString("frame_schedule_interval", "0")
+        }
+        if (percent != null && percent != "50") {
+            edit.putString("frame_art_cadence", "PERCENT").putString("frame_art_amount", percent)
+        }
+        oldKeys.forEach(edit::remove)
+        edit.apply()
+    }
 
     // Overlays - Top
     var slotTopLeft1 by nullableEnumValuePref(OverlayType.EMPTY, "slot_top_left1")
@@ -79,7 +127,7 @@ object GeneralPrefs : KotprefModel() {
     var overlayMetadata1VideosFolderLevel by stringPref("1", "overlay_metadata1_video_folder_levels")
     var overlayMetadata1VideosLocationType by nullableEnumValuePref(LocationType.CITY_COUNTRY, "overlay_metadata1_video_location_type")
 
-    var overlayMetadata1Photos by stringPref("DESCRIPTION,LOCATION,DATE_TAKEN", "overlay_metadata1_photos")
+    var overlayMetadata1Photos by stringPref("PHOTO_CONTEXT,DESCRIPTION,LOCATION,DATE_TAKEN", "overlay_metadata1_photos")
     var overlayMetadata1PhotosFolderLevel by stringPref("1", "overlay_metadata1_photo_folder_levels")
     var overlayMetadata1PhotosLocationType by nullableEnumValuePref(LocationType.CITY_COUNTRY, "overlay_metadata1_photo_location_type")
     var overlayMetadata1PhotosDateType by nullableEnumValuePref(DateType.COMPACT, "overlay_metadata1_photo_date_type")
@@ -92,7 +140,7 @@ object GeneralPrefs : KotprefModel() {
     var overlayMetadata2VideosFolderLevel by stringPref("1", "overlay_metadata2_video_folder_levels")
     var overlayMetadata2VideosLocationType by nullableEnumValuePref(LocationType.CITY_COUNTRY, "overlay_metadata2_video_location_type")
 
-    var overlayMetadata2Photos by stringPref("DESCRIPTION,LOCATION,DATE_TAKEN", "overlay_metadata2_photos")
+    var overlayMetadata2Photos by stringPref("PHOTO_CONTEXT,DESCRIPTION,LOCATION,DATE_TAKEN", "overlay_metadata2_photos")
     var overlayMetadata2PhotosFolderLevel by stringPref("1", "overlay_metadata2_photo_folder_levels")
     var overlayMetadata2PhotosLocationType by nullableEnumValuePref(LocationType.CITY_COUNTRY, "overlay_metadata2_photo_location_type")
     var overlayMetadata2PhotosDateType by nullableEnumValuePref(DateType.COMPACT, "overlay_metadata2_photo_date_type")
@@ -105,7 +153,7 @@ object GeneralPrefs : KotprefModel() {
     var overlayMetadata3VideosFolderLevel by stringPref("1", "overlay_metadata3_video_folder_levels")
     var overlayMetadata3VideosLocationType by nullableEnumValuePref(LocationType.CITY_COUNTRY, "overlay_metadata3_video_location_type")
 
-    var overlayMetadata3Photos by stringPref("DESCRIPTION,LOCATION,DATE_TAKEN", "overlay_metadata3_photos")
+    var overlayMetadata3Photos by stringPref("PHOTO_CONTEXT,DESCRIPTION,LOCATION,DATE_TAKEN", "overlay_metadata3_photos")
     var overlayMetadata3PhotosFolderLevel by stringPref("1", "overlay_metadata3_photo_folder_levels")
     var overlayMetadata3PhotosLocationType by nullableEnumValuePref(LocationType.CITY_COUNTRY, "overlay_metadata3_photo_location_type")
     var overlayMetadata3PhotosDateType by nullableEnumValuePref(DateType.COMPACT, "overlay_metadata3_photo_date_type")
@@ -118,7 +166,7 @@ object GeneralPrefs : KotprefModel() {
     var overlayMetadata4VideosFolderLevel by stringPref("1", "overlay_metadata4_video_folder_levels")
     var overlayMetadata4VideosLocationType by nullableEnumValuePref(LocationType.CITY_COUNTRY, "overlay_metadata4_video_location_type")
 
-    var overlayMetadata4Photos by stringPref("DESCRIPTION,LOCATION,DATE_TAKEN", "overlay_metadata4_photos")
+    var overlayMetadata4Photos by stringPref("PHOTO_CONTEXT,DESCRIPTION,LOCATION,DATE_TAKEN", "overlay_metadata4_photos")
     var overlayMetadata4PhotosFolderLevel by stringPref("1", "overlay_metadata4_photo_folder_levels")
     var overlayMetadata4PhotosLocationType by nullableEnumValuePref(LocationType.CITY_COUNTRY, "overlay_metadata4_photo_location_type")
     var overlayMetadata4PhotosDateType by nullableEnumValuePref(DateType.COMPACT, "overlay_metadata4_photo_date_type")
@@ -152,6 +200,7 @@ object GeneralPrefs : KotprefModel() {
     // Startup + Shutdown
     var showLoadingText by booleanPref(true, "startup_show_loading")
     var startScreensaverOnLaunch by booleanPref(false, "startup_screensaver_on_launch")
+    var startFrameOnBoot by booleanPref(false, "startup_frame_on_boot")
     var loadingTextSize by stringPref("18", "startup_size")
     var loadingTextWeight by stringPref("300", "startup_weight")
 
@@ -162,8 +211,8 @@ object GeneralPrefs : KotprefModel() {
     var mediaFadeOutDuration by stringPref("800", "media_fade_out_duration")
 
     // Overlay Auto hide/reveal
-    var overlayVisibility by stringPref("ALWAYS_VISIBLE", "overlay_visibility")
-    var overlayVisibilityDelay by stringPref("4", "overlay_visibility_delay")
+    var overlayVisibility by stringPref("HIDE_AFTER_DELAY", "overlay_visibility")
+    var overlayVisibilityDelay by stringPref("8", "overlay_visibility_delay")
     var overlayRevealTimeout by stringPref("4", "overlay_reveal_timeout")
 
     // Per-corner fade settings (which corners should fade when auto-hide is enabled)
@@ -254,7 +303,7 @@ object GeneralPrefs : KotprefModel() {
 
     // Playlist - Photos
     var slideshowSpeed by stringPref("30", "slideshow_speed")
-    var photoScalePortrait by nullableEnumValuePref(PhotoScale.CENTER_CROP, "photo_scale_portrait")
+    var photoScalePortrait by nullableEnumValuePref(PhotoScale.FIT_CENTER, "photo_scale_portrait")
     var photoScaleLandscape by nullableEnumValuePref(PhotoScale.CENTER_CROP, "photo_scale_landscape")
     var photoBackgroundBlurEnabled by booleanPref(true, "photo_background_blur_enabled")
     var photoBackgroundBlurOpacity by stringPref("40", "photo_background_blur_opacity")

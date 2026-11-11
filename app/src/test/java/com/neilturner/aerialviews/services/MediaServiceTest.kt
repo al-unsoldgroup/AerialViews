@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Bundle
 import com.neilturner.aerialviews.data.PlaylistCacheRepository
 import com.neilturner.aerialviews.data.network.NetworkHelper
+import com.neilturner.aerialviews.models.MediaFetchResult
 import com.neilturner.aerialviews.models.MediaPlaylist
 import com.neilturner.aerialviews.models.TimeOfDayFilter
 import com.neilturner.aerialviews.models.enums.AerialMediaSource
@@ -15,9 +16,14 @@ import com.neilturner.aerialviews.models.videos.AerialMedia
 import com.neilturner.aerialviews.models.videos.AerialMediaMetadata
 import com.neilturner.aerialviews.providers.MediaProvider
 import com.neilturner.aerialviews.providers.ProviderFetchResult
+import com.neilturner.aerialviews.providers.custom.KrillFrameCache
+import com.neilturner.aerialviews.providers.custom.KrillPrivateProvider
+import com.neilturner.aerialviews.providers.custom.KrillTokenStore
+import com.neilturner.aerialviews.providers.custom.krillSettingsHash
 import com.neilturner.aerialviews.utils.FirebaseHelper
 import io.mockk.Runs
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
@@ -26,6 +32,7 @@ import io.mockk.mockkObject
 import io.mockk.slot
 import io.mockk.unmockkConstructor
 import io.mockk.unmockkObject
+import io.mockk.verify
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -56,6 +63,68 @@ internal class MediaServiceTest {
         unmockkObject(FirebaseHelper)
         unmockkConstructor(Bundle::class)
     }
+
+    @Test
+    fun `failed Krill refresh returns matching cached playlist without overwriting it`() =
+        runTest {
+            mockkConstructor(PlaylistCacheRepository::class)
+            mockkObject(KrillFrameCache)
+            try {
+                val session = mockk<KrillTokenStore.Session>(relaxed = true)
+                every { session.cacheNamespace } returns "fallback-test"
+                every { session.spaceId } returns "mine"
+                every { session.libraryOrigin } returns "https://library.example"
+                every { KrillFrameCache.privatePlaybackBlocked(any()) } returns false
+                val krill = mockk<KrillPrivateProvider>(relaxed = true)
+                every { krill.enabled } returns false
+                every { krill.type } returns ProviderSourceType.REMOTE
+                coEvery { krill.fetch() } returns ProviderFetchResult.Error("unavailable")
+                val cached = MediaFetchResult(MediaPlaylist(listOf(testMedia("cached", AerialMediaSource.LOCAL))), null, isFromCache = true)
+                coEvery { anyConstructed<PlaylistCacheRepository>().isCacheValid(any(), any()) } returns false
+                val hash = slot<String>()
+                coEvery { anyConstructed<PlaylistCacheRepository>().getCachedPlaylist(any(), capture(hash)) } returns cached
+                val service =
+                    MediaService(
+                        context,
+                        mutableListOf(krill),
+                        defaultConfig().copy(playlistCache = true),
+                        privateSessionProvider = { session },
+                    )
+
+                assertEquals(cached, service.fetchMedia())
+                val settings = defaultConfig()
+                val expected =
+                    PlaylistSettingsHash.build(
+                        PlaylistSettingsHash.Settings(
+                            settings.removeDuplicates,
+                            settings.ignoreNonManifestVideos,
+                            settings.shuffleVideos,
+                            settings.shuffleMusic,
+                            settings.repeatMusic,
+                            false,
+                        ),
+                        listOf("${krill.type}:${krillSettingsHash(session)}"),
+                    )
+                assertEquals(expected, hash.captured)
+                verify(exactly = 0) { krill.settingsHash() }
+                coVerify(exactly = 0) { anyConstructed<PlaylistCacheRepository>().cachePlaylist(any(), any(), any(), any()) }
+            } finally {
+                unmockkObject(KrillFrameCache)
+                unmockkConstructor(PlaylistCacheRepository::class)
+            }
+        }
+
+    @Test
+    fun `Krill provider failure is reported before a playlist can be cached`() =
+        runTest {
+            val provider = mockk<KrillPrivateProvider>(relaxed = true)
+            every { provider.enabled } returns true
+            every { provider.type } returns ProviderSourceType.REMOTE
+            coEvery { provider.fetch() } returns ProviderFetchResult.Error("unavailable")
+            val result = MediaServiceHelper.buildProviderContent(listOf(provider))
+            assertTrue(result.krillFailed)
+            assertTrue(result.media.isEmpty())
+        }
 
     @Test
     fun `returns only visual playlist when no provider exposes music`() =
