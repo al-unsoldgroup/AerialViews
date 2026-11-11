@@ -34,6 +34,10 @@
     <string name="krill_login_failed">Could not connect or sign in. Check the library address and try again.</string>
     <string name="krill_no_spaces">This account has no Krill libraries.</string>
     <string name="krill_login_success">Krill library connected.</string>
+    <string name="krill_login_success_sources_off">Krill library connected. Other sources turned off.</string>
+    <string name="krill_not_signed_in">Not signed in</string>
+    <string name="krill_connected">Connected</string>
+    <string name="krill_connected_to">Connected to %1$s</string>
     <string name="krill_signed_out">Signed out of Krill.</string>
     <string name="krill_logout_failed">Sign-out cleanup is still pending. Try again.</string>
 

@@ -1,13 +1,22 @@
 package com.neilturner.aerialviews.ui.sources
 
+import android.graphics.Bitmap
+import android.graphics.Color
 import android.os.Bundle
 import android.os.SystemClock
+import android.view.Gravity
+import android.view.View
+import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.lifecycle.lifecycleScope
 import androidx.preference.EditTextPreference
 import androidx.preference.Preference
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
 import com.neilturner.aerialviews.R
+import com.neilturner.aerialviews.models.prefs.disableOtherSources
 import com.neilturner.aerialviews.providers.custom.KrillDeviceAuth
 import com.neilturner.aerialviews.providers.custom.KrillFrameCache
 import com.neilturner.aerialviews.providers.custom.KrillLoginAttempts
@@ -45,6 +54,36 @@ class KrillFragment : MenuStateFragment() {
         super.onDestroy()
     }
 
+    override fun onResume() {
+        super.onResume()
+        refreshSummary()
+    }
+
+    private fun refreshSummary() {
+        val context = context?.applicationContext ?: return
+        lifecycleScope.launch {
+            val session = withContext(Dispatchers.IO) { runCatching { KrillSessionManager(context).cachedSession() }.getOrNull() }
+            findPreference<Preference>("krill_sign_in")?.summary =
+                krillConnectionSummary(
+                    session?.spaceId != null,
+                    session?.spaceName,
+                    getString(R.string.krill_not_signed_in),
+                    getString(R.string.krill_connected),
+                ) { getString(R.string.krill_connected_to, it) }
+        }
+    }
+
+    // 400 px scans from a sofa on a 1080p TV; the encoder adds the white quiet zone.
+    private fun qrView(content: String): View? =
+        runCatching {
+            val size = 400
+            val matrix = QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, size, size)
+            val pixels = IntArray(size * size) { if (matrix[it % size, it / size]) Color.BLACK else Color.WHITE }
+            val image = ImageView(requireContext())
+            image.setImageBitmap(Bitmap.createBitmap(pixels, size, size, Bitmap.Config.RGB_565))
+            FrameLayout(requireContext()).apply { addView(image, FrameLayout.LayoutParams(size, size, Gravity.CENTER)) }
+        }.getOrNull()
+
     override fun onCreatePreferences(
         savedInstanceState: Bundle?,
         rootKey: String?,
@@ -76,6 +115,7 @@ class KrillFragment : MenuStateFragment() {
                     } catch (_: Exception) {
                         withContext(Dispatchers.Main) { Toast.makeText(context, R.string.krill_logout_failed, Toast.LENGTH_LONG).show() }
                     }
+                    withContext(Dispatchers.Main) { refreshSummary() }
                 }
             pendingLogout = logout
             logout.start()
@@ -111,6 +151,7 @@ class KrillFragment : MenuStateFragment() {
                     .Builder(requireContext())
                     .setTitle(R.string.krill_login_title)
                     .setMessage(getString(R.string.krill_login_instructions, device.verificationUri, device.userCode))
+                    .setView(qrView(krillQrContent(device.verificationUri, device.verificationUriComplete)))
                     .setNegativeButton(R.string.button_cancel) { _, _ -> loginJob?.cancel() }
                     .setOnCancelListener { loginJob?.cancel() }
                     .show()
@@ -159,6 +200,7 @@ class KrillFragment : MenuStateFragment() {
                                                     refresh,
                                                     expiry,
                                                     spaces[index].id,
+                                                    spaceName = spaces[index].name,
                                                 ),
                                             ) { attempts.isCurrent(attempt) }
                                         if (!didSave) return@withContext false
@@ -167,10 +209,15 @@ class KrillFragment : MenuStateFragment() {
                                 if (saved &&
                                     attempts.isCurrent(attempt)
                                 ) {
-                                    Toast.makeText(context, R.string.krill_login_success, Toast.LENGTH_SHORT).show()
+                                    // Once, at connect time only; sources the user re-enables later stay on.
+                                    val sourcesOff = disableOtherSources()
+                                    val message = if (sourcesOff) R.string.krill_login_success_sources_off else R.string.krill_login_success
+                                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                                 }
                             } catch (_: Exception) {
                                 Toast.makeText(context, R.string.krill_login_failed, Toast.LENGTH_LONG).show()
+                            } finally {
+                                refreshSummary()
                             }
                         }
                     }.setNegativeButton(R.string.button_cancel, null)

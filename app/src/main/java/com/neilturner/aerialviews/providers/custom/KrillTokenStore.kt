@@ -28,6 +28,8 @@ internal class KrillTokenStore(
         val spaceId: String? = null,
         // Generated for each sign-in and stored with the encrypted credentials.
         val cacheNamespace: String = "",
+        // Shown in the menu; absent in sessions saved before it was recorded.
+        val spaceName: String? = null,
     ) {
         override fun toString(): String =
             "Session(issuer=$issuer, clientId=$clientId, libraryOrigin=$libraryOrigin, expiresAtMillis=$expiresAtMillis)"
