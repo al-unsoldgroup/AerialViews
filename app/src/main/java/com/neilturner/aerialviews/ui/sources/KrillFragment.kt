@@ -178,6 +178,8 @@ class KrillFragment : MenuStateFragment() {
                 return
             }
             val expiry = System.currentTimeMillis() + granted.expiresIn * 1000L
+            // UNS-1751: no Cancel button. D-pad down from the last library moved focus to it, so
+            // centre cancelled without saving and the playlist stayed empty. Back cancels.
             choiceDialog =
                 AlertDialog
                     .Builder(requireContext())
@@ -220,8 +222,7 @@ class KrillFragment : MenuStateFragment() {
                                 refreshSummary()
                             }
                         }
-                    }.setNegativeButton(R.string.button_cancel, null)
-                    .show()
+                    }.show()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
