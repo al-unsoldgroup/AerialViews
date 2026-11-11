@@ -59,6 +59,9 @@ class KrillCaptionTest {
         assertEquals("", KrillCaption.cleanLegacy("PXL_20261022_030718123.jpg • 2026-10-22T03:07:18.000+11:00"))
         assertEquals("Painting • Museum credit", KrillCaption.cleanLegacy("Painting • Museum credit • Painting"))
         assertEquals("Sunset at the pier", KrillCaption.cleanLegacy("Sunset at the pier"))
+        assertEquals("", KrillCaption.cleanLegacy("Shared from iPhone"))
+        assertEquals("Museum credit", KrillCaption.cleanLegacy("shared from iphone • Museum credit"))
+        assertEquals("Shared from iPhone at the pier", KrillCaption.cleanLegacy("Shared from iPhone at the pier"))
     }
 
     @Test

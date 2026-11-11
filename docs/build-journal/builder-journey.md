@@ -489,6 +489,16 @@ Goal: let someone else build the same frame. Added `docs/community-guide.md` (ha
 
 Verified without signing secrets: `:app:assembleGithubRelease` stops at `validateSigningGithubRelease` ("Keystore file not set for signing config legacy"), which is the expected failure. `:app:minifyGithubReleaseWithR8` passes. With a throwaway key created outside the repository and deleted afterwards, `assembleGithubRelease` produced an APK for `com.neilturner.aerialviews`, versionCode 151, versionName 1.8.6. A signed release with the real key, publication and TV install are not done. The guides use placeholders only.
 
+### Heads cut off and a junk caption (UNS-1754, 11 November)
+
+Two bugs seen on the TV with build a9c30e0b. First, a portrait with no collage partner was cropped to 16:9 around Cloudflare's saliency point, which on a standing group sat on the bodies and cut the tallest head off. Second, one photo showed "Shared from iPhone" as its caption: the share upload used that text as the title when the Shortcut sent no file name, and the frame showed the title when no verified caption existed.
+
+Crop changes on the frame: a portrait single now asks Krill for `gravity=face` on its full-screen crop. While the original is on screen, and when no server crop is available, a portrait without a saved point is placed around its upper part (38 percent from the top) instead of its centre. A source that would keep under 35 percent of its longer side (a 9:16 phone portrait keeps 32 percent on a 16:9 screen) is not cropped: it is fitted over the blurred backdrop. A saved phone focus point still wins over all of this. The 35 percent rule is an aspect heuristic, not face detection; Krill stores no face boxes.
+
+Caption changes: the frame drops "Shared from iPhone" style defaults from legacy captions, which also cleans rows already cached. Krill now titles an unnamed share "Untitled" and withholds such titles from the frame feed.
+
+The full unit suite (704 tests, 0 failures), the formatting check and `assembleBetaDebug` passed. Not verified on the TV. Order matters: Krill must be deployed before this build is installed, because crops are cached by URL and an older Krill ignores `gravity=face`. What Cloudflare does with `gravity=face` when a portrait has no face is not documented and needs a look on the TV.
+
 ## Next experiments
 
 1. Finish reviewing the Krill integration and artwork import, then verify its authorized deployment and private image delivery.

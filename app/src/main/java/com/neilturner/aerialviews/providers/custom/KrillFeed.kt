@@ -106,6 +106,8 @@ internal object KrillFeed {
                 .setQueryParameter("crop", "auto")
                 .setQueryParameter("width", targetWidth.toString())
                 .setQueryParameter("height", targetHeight.toString())
+                // A portrait on a landscape screen loses most of its height: ask Krill to keep faces (UNS-1754).
+                .apply { if (height > width) setQueryParameter("gravity", "face") }
                 .apply { focusRevision?.takeIf { it > 0 }?.let { setQueryParameter("focus_revision", it.toString()) } }
                 .build()
                 .toString()
