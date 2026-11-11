@@ -28,6 +28,7 @@ leanback-preference = "1.2.0"
 preference-ktx = "1.2.1"
 
 okhttp = "5.5.1"
+zxing = "3.5.4"
 retrofit = "3.0.0"
 
 smbj = "0.13.0"
@@ -95,6 +96,7 @@ kotpref-initializer = { group = "com.chibatching.kotpref", name = "initializer",
 kotpref-enum-support = { group = "com.chibatching.kotpref", name = "enum-support", version.ref = "kotpref" }
 
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
 okhttp-logging = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "okhttp" }
 retrofit = { group = "com.squareup.retrofit2", name = "retrofit", version.ref = "retrofit" }
 converter-kotlin-serialization = { group = "com.squareup.retrofit2", name = "converter-kotlinx-serialization", version.ref = "retrofit" }

@@ -22,6 +22,7 @@ import com.neilturner.aerialviews.models.prefs.SambaMediaPrefs
 import com.neilturner.aerialviews.models.prefs.SambaMediaPrefs2
 import com.neilturner.aerialviews.models.prefs.WebDavMediaPrefs
 import com.neilturner.aerialviews.models.prefs.WebDavMediaPrefs2
+import com.neilturner.aerialviews.models.prefs.disableOtherSources
 import com.neilturner.aerialviews.providers.custom.CustomFeedProvider
 import com.neilturner.aerialviews.ui.helpers.PreferenceHelper
 import timber.log.Timber
@@ -71,21 +72,10 @@ object TestConfigApplier {
         return summary
     }
 
+    // The built in feeds are enabled by default and would otherwise dominate the playlist,
+    // so a test run would take a long time to reach the provider under test.
     private fun disableAllProviders() {
-        CustomFeedPrefs.enabled = false
-        SambaMediaPrefs.enabled = false
-        SambaMediaPrefs2.enabled = false
-        WebDavMediaPrefs.enabled = false
-        WebDavMediaPrefs2.enabled = false
-        ImmichMediaPrefs.enabled = false
-        NCMemoriesMediaPrefs.enabled = false
-        LocalMediaPrefs.enabled = false
-        // The built in community feeds are enabled by default and would otherwise dominate the
-        // playlist, so a test run would take a long time to reach the provider under test.
-        Comm1VideoPrefs.enabled = false
-        Comm2VideoPrefs.enabled = false
-        AmazonVideoPrefs.enabled = false
-        AppleVideoPrefs.enabled = false
+        disableOtherSources()
     }
 
     private fun applyGeneral(general: GeneralConfig) {

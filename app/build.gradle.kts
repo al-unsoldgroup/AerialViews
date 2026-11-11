@@ -220,6 +220,7 @@ dependencies {
     implementation(libs.bundles.flowbus)
     implementation(libs.bundles.kotpref)
     implementation(libs.bundles.coil)
+    implementation(libs.zxing.core)
     implementation(libs.bundles.retrofit)
 
     implementation(libs.bundles.ktor)
