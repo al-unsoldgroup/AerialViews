@@ -99,6 +99,7 @@ Taken from the UNS-1748 checklist:
 - [ ] Deletion: permanent deletion is on the phone only; the TV offers only removal from rotation
 - [ ] Offline and reconnect: cached pictures keep playing offline and the playlist recovers
 - [ ] New media appears in the running rotation without a restart
+- [ ] Signed release build signs in and plays the Krill library on a fresh install (choose the library with D-pad down then centre)
 - [ ] Screensaver starts, and the app can be left to the normal TV interface
 - [ ] A screen capture or log extract is attached with addresses and names removed
 
