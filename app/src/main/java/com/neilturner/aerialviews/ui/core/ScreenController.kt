@@ -78,6 +78,7 @@ import com.neilturner.aerialviews.ui.overlays.NowPlayingOverlay
 import com.neilturner.aerialviews.ui.overlays.WeatherForecastOverlay
 import com.neilturner.aerialviews.ui.overlays.WeatherNowOverlay
 import com.neilturner.aerialviews.ui.overlays.state.MessageOverlayState
+import com.neilturner.aerialviews.ui.overlays.state.MetadataOverlayState
 import com.neilturner.aerialviews.ui.overlays.state.OverlayEventBridge
 import com.neilturner.aerialviews.ui.overlays.state.OverlayStateStore
 import com.neilturner.aerialviews.ui.overlays.state.OverlayUiState
@@ -343,6 +344,9 @@ class ScreenController(
             WindowHelper.resetSystemAnimationDuration(context)
         }
 
+        // Before the gradient preference is read: the migration turns the bottom shade off once.
+        GeneralPrefs.migrateKrillCaptionOverlays()
+
         // Gradients - set up backgrounds but visibility will be managed with overlays
         if (GeneralPrefs.showTopGradient) {
             gradientTopView.background = GradientHelper.smoothBackgroundAlt(GradientDrawable.Orientation.TOP_BOTTOM)
@@ -360,7 +364,6 @@ class ScreenController(
         // A manual change (D-pad or Back) holds until the schedule's next change, which is the next
         // dashboard start or end. Then the schedule takes over again.
         GeneralPrefs.migrateFrameSchedule()
-        GeneralPrefs.migrateKrillCaptionOverlays()
         dashboardScheduleJob =
             mainScope.launch {
                 val offlineTracker = OfflineTracker()
@@ -663,7 +666,9 @@ class ScreenController(
             Timber.i("Loading: ${media.metadata.shortDescription} - ${media.uri} (${media.metadata.pointsOfInterest})")
         }
 
-        updateMetadataOverlayData(media)
+        // The previous picture stays up until this one is prepared, so its caption goes now and the
+        // new one is resolved only when the new picture is displayed (UNS-1759).
+        hideCaptions()
 
         // Set overlay positions
         overlayHelper.assignOverlaysAndIds(
@@ -836,15 +841,28 @@ class ScreenController(
             }
 
             "HIDE_AFTER_DELAY" -> {
-                // Show overlays, then hide after delay
-                overlayHelper.getOverlaysToFade().forEach { it.alpha = overlayVisibleAlpha }
+                // Fade overlays in once the picture has faded in, then hide after delay
+                val overlaysToFade = overlayHelper.getOverlaysToFade()
+                if (overlaysToFade.isEmpty()) hideOverlays()
+                overlaysToFade.forEachIndexed { index, view ->
+                    view.alpha = 0f
+                    val animator =
+                        view
+                            .animate()
+                            .alpha(overlayVisibleAlpha)
+                            .setStartDelay(startDelay + mediaFadeIn)
+                            .setDuration(overlayFadeIn)
+                    if (index == overlaysToFade.lastIndex) {
+                        animator.withEndAction { hideOverlays(overlayVisibilityDelay * 1000) }
+                    }
+                    animator.start()
+                }
                 if (GeneralPrefs.showTopGradient && overlayHelper.hasTopOverlaysToFade()) {
                     gradientTopView.alpha = 1f
                 }
                 if (GeneralPrefs.showBottomGradient && overlayHelper.hasBottomOverlaysToFade()) {
                     gradientBottomView.alpha = 1f
                 }
-                hideOverlays(overlayDelay)
             }
 
             "SHOW_AFTER_DELAY" -> {
@@ -893,6 +911,19 @@ class ScreenController(
             }
         }
 
+        // Captions the mode above does not fade in still wait for the picture's own fade-in (UNS-1759).
+        val fading = overlayHelper.getOverlaysToFade()
+        overlayHelper.findOverlay<MetadataOverlay>().forEach { caption ->
+            if (overlayVisibilityMode != "ALWAYS_VISIBLE" && caption in fading) return@forEach
+            caption.alpha = 0f
+            caption
+                .animate()
+                .alpha(overlayVisibleAlpha)
+                .setStartDelay(startDelay + mediaFadeIn)
+                .setDuration(overlayFadeIn)
+                .start()
+        }
+
         // Fade out LoadingView
         // Video should be playing underneath
         loadingView
@@ -910,6 +941,7 @@ class ScreenController(
     private fun fadeOutCurrentItem() {
         if (!canSkip || dashboardView != null) return
         canSkip = false
+        hideCaptions()
 
         val nextPhoto =
             if (!previousItem && !loopUntilSkipped) {
@@ -1049,7 +1081,17 @@ class ScreenController(
 
     private fun renderMetadataOverlays(state: OverlayUiState) {
         overlayHelper.findOverlay<MetadataOverlay>().forEach { overlay ->
-            state.metadata[overlay.type]?.let { overlay.render(it, videoPlayer) }
+            // A slot with no caption for the current item is blank, never the previous item's text.
+            overlay.render(state.metadata[overlay.type] ?: MetadataOverlayState(), videoPlayer)
+        }
+    }
+
+    /** A caption is only ever visible with its own picture: it goes as that picture starts to leave. */
+    private fun hideCaptions() {
+        metadataJobs.values.forEach { it.cancel() }
+        overlayHelper.findOverlay<MetadataOverlay>().forEach {
+            it.animate().cancel()
+            it.alpha = 0f
         }
     }
 
@@ -2524,7 +2566,11 @@ class ScreenController(
     override fun onVideoAlmostFinished() = fadeOutCurrentItem()
 
     override fun onVideoPrepared() {
-        if (!blackOutMode) fadeInNextItem()
+        if (blackOutMode) return
+        currentMedia
+            ?.takeIf { it.type == AerialMediaType.VIDEO }
+            ?.let { updateMetadataOverlayData(it) }
+        fadeInNextItem()
     }
 
     override fun onVideoError() = handleError()

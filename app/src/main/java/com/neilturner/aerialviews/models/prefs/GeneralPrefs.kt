@@ -230,7 +230,9 @@ object GeneralPrefs : KotprefModel() {
 
     // Gradients
     var showTopGradient by booleanPref(false, "gradient_top_show")
-    var showBottomGradient by booleanPref(true, "gradient_bottom_show")
+
+    // Off for the picture frame: no full-width shade, overlay text carries its own shadow (UNS-1759).
+    var showBottomGradient by booleanPref(false, "gradient_bottom_show")
 
     // Typeface (for whole app)
     var fontTypeface by stringPref("google-sans", "font_typeface")

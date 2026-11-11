@@ -23,13 +23,18 @@ internal object KrillCaption {
         val capturedLocal: String? = null,
         val artworkTitle: String? = null,
         val artworkArtist: String? = null,
+        val art: Boolean = false,
     )
 
-    /** Artwork shows title and artist; otherwise place, then local capture time. Null when nothing is known. */
+    /**
+     * Artwork shows title and artist; otherwise place, then local capture time. Null when nothing is known.
+     * Art with neither title nor artist is blank, which the frame shows as "Untitled", not as a capture date.
+     */
     fun format(fields: Fields): String? {
         val title = fields.artworkTitle.clean()
         val artist = fields.artworkArtist.clean()
         if (title != null || artist != null) return listOfNotNull(title, artist).joinToString("\n")
+        if (fields.art) return ""
         val specific = fields.placeAttraction.clean() ?: fields.placeNeighborhood.clean()
         val place = listOfNotNull(specific, fields.placeCity.clean(), fields.placeCountry.clean()).distinct().joinToString(", ")
         return listOfNotNull(place.ifEmpty { null }, prettyTime(fields.capturedLocal)).joinToString("\n").ifEmpty { null }
@@ -68,16 +73,24 @@ internal object KrillCaption {
     }
 
     fun migrateOverlayPrefs(prefs: SharedPreferences) {
-        if (prefs.getBoolean(OVERLAYS_MIGRATED, false)) return
+        val captions = !prefs.getBoolean(OVERLAYS_MIGRATED, false)
+        val shade = !prefs.getBoolean(SHADE_MIGRATED, false)
+        if (!captions && !shade) return
         val edit = prefs.edit()
-        (1..4).forEach { slot ->
-            val key = "overlay_metadata${slot}_photos"
-            prefs.getString(key, null)?.let { edit.putString(key, withPhotoContextFirst(it)) }
+        if (captions) {
+            (1..4).forEach { slot ->
+                val key = "overlay_metadata${slot}_photos"
+                prefs.getString(key, null)?.let { edit.putString(key, withPhotoContextFirst(it)) }
+            }
+            edit.putBoolean(OVERLAYS_MIGRATED, true)
         }
-        edit.putBoolean(OVERLAYS_MIGRATED, true).apply()
+        // A saved full-width bottom shade is turned off once; it can be switched back on in settings.
+        if (shade) edit.putBoolean("gradient_bottom_show", false).putBoolean(SHADE_MIGRATED, true)
+        edit.apply()
     }
 
     private const val OVERLAYS_MIGRATED = "krill_caption_overlays_migrated"
+    private const val SHADE_MIGRATED = "krill_caption_shade_migrated"
 
     private fun String?.clean(): String? = this?.trim()?.takeIf { it.isNotEmpty() }
 }
