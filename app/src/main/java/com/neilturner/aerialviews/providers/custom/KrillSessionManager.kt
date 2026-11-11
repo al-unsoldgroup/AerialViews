@@ -51,43 +51,6 @@ internal class KrillSessionManager(
 
     fun clear() = synchronized(stateLock) { store.clear() }
 
-    /** Persist the retry key before sending any request. One operation is retained per session. */
-    fun prepareDeletion(
-        namespace: String,
-        imageUrl: String,
-    ): KrillTokenStore.PendingDeletion =
-        KrillFrameCache.withAvailableSession(appContext) {
-            synchronized(stateLock) {
-                val current = loadOrMigrate() ?: throw IOException("Krill login required")
-                check(namespace.isNotBlank() && current.cacheNamespace == namespace) { "Krill account changed" }
-                require(KrillPrivateFeed.isSelectedImage(imageUrl, current.libraryOrigin, current.spaceId)) {
-                    "Photo is outside the selected library"
-                }
-                val existing = current.pendingDeletion
-                if (existing != null) {
-                    check(existing.imageUrl == imageUrl) { "Another deletion is pending" }
-                    existing
-                } else {
-                    val pending = KrillTokenStore.PendingDeletion(imageUrl, KrillOperationId.create())
-                    store.save(current.copy(pendingDeletion = pending))
-                    pending
-                }
-            }
-        } ?: throw IOException("Krill session is unavailable")
-
-    fun clearDeletion(
-        namespace: String,
-        operation: String,
-    ): Boolean =
-        KrillFrameCache.withAvailableSession(appContext) {
-            synchronized(stateLock) {
-                val current = loadOrMigrate() ?: return@synchronized false
-                if (current.cacheNamespace != namespace || current.pendingDeletion?.operation != operation) return@synchronized false
-                store.save(current.copy(pendingDeletion = null))
-                true
-            }
-        } ?: false
-
     fun session(
         client: OkHttpClient,
         checkActive: () -> Unit = {},

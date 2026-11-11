@@ -64,8 +64,7 @@ To build the APK yourself instead, see [the release checklist](release-checklist
    account that owns the library.
 5. Back on the TV pick the library to show. The app confirms "Krill library connected".
 
-The TV stores only a device token. **Sign out of Krill** in the same menu removes it. The
-separate **Sign in with photo deletion** option is off by default and is not needed to show photos.
+The TV stores only a device token. **Sign out of Krill** in the same menu removes it.
 
 ## 4. Sources
 

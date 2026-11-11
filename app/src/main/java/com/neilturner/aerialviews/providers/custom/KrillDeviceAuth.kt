@@ -109,12 +109,12 @@ internal class KrillDeviceAuth(
         return result
     }
 
-    fun start(allowDeletion: Boolean = false): DeviceCode {
+    fun start(): DeviceCode {
         val body =
             FormBody
                 .Builder()
                 .add("client_id", clientId)
-                .add("scope", if (allowDeletion) "openid email offline_access frame:delete" else "openid email offline_access")
+                .add("scope", "openid email offline_access")
                 .build()
         val request =
             Request

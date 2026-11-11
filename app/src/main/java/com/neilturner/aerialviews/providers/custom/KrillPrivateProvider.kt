@@ -19,7 +19,6 @@ import okhttp3.Call
 import okhttp3.EventListener
 import okhttp3.OkHttpClient
 import java.io.IOException
-import java.util.concurrent.TimeUnit
 
 @OptIn(InternalCoroutinesApi::class)
 internal fun cancellableKrillClient(job: Job?): OkHttpClient =
@@ -44,10 +43,6 @@ internal fun cancellableKrillClient(job: Job?): OkHttpClient =
                 }
             }
         }.build()
-
-/** Bound each deletion, status, permission or token request and cancel it when its screen stops. */
-internal fun deletionKrillClient(job: Job?): OkHttpClient =
-    cancellableKrillClient(job).newBuilder().callTimeout(30, TimeUnit.SECONDS).build()
 
 internal fun krillSettingsHash(session: KrillTokenStore.Session?): String =
     "${session?.libraryOrigin}:${session?.spaceId}".hashCode().toString()

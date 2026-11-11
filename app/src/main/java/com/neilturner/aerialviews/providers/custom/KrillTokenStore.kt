@@ -18,12 +18,6 @@ internal class KrillTokenStore(
     context: Context,
 ) {
     @Serializable
-    data class PendingDeletion(
-        val imageUrl: String,
-        val operation: String,
-    )
-
-    @Serializable
     data class Session(
         val issuer: String,
         val clientId: String,
@@ -34,7 +28,6 @@ internal class KrillTokenStore(
         val spaceId: String? = null,
         // Generated for each sign-in and stored with the encrypted credentials.
         val cacheNamespace: String = "",
-        val pendingDeletion: PendingDeletion? = null,
     ) {
         override fun toString(): String =
             "Session(issuer=$issuer, clientId=$clientId, libraryOrigin=$libraryOrigin, expiresAtMillis=$expiresAtMillis)"

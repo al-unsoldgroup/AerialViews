@@ -27,14 +27,6 @@
     <string name="krill_library_title">Krill library address</string>
     <string name="krill_library_summary">Enter the HTTPS address of your Krill library</string>
     <string name="krill_sign_in">Sign in and choose a library</string>
-    <string name="krill_sign_in_delete">Sign in with photo deletion</string>
-    <string name="krill_sign_in_delete_summary">Allow this frame to request permanent deletion from your library.</string>
-    <string name="krill_delete_permission_message">This permission lets the frame permanently delete photos from Krill and Cloudflare. You will confirm the permission on your phone.</string>
-    <string name="krill_cancel_pending">Cancel an unaccepted deletion</string>
-    <string name="krill_cancel_pending_message">Cancel only if Krill has not already accepted the deletion request?</string>
-    <string name="krill_cancel_done">Unaccepted deletion cancelled.</string>
-    <string name="krill_cancel_accepted">Krill already accepted this deletion; it cannot be cancelled here.</string>
-    <string name="krill_cancel_error">Could not cancel. Check library access and try again.</string>
     <string name="krill_sign_out">Sign out of Krill</string>
     <string name="krill_login_title">Sign in to Krill</string>
     <string name="krill_login_instructions">On your phone, open %1$s and enter code %2$s.</string>

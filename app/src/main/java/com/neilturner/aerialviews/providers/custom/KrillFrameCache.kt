@@ -70,7 +70,7 @@ internal object KrillFrameCache {
         cleanupPending(context) ||
             runBlocking(Dispatchers.IO) { AerialDatabase.getInstance(context).privateReconciliationDao().current() != null }
 
-    /** Complete a previously recorded cleanup; safe to repeat after a process restart. */
+    /** Complete a cleanup recorded by an earlier build; safe to repeat after a process restart. */
     private fun finishDeletionCleanup(context: Context) {
         val prefs = cleanupPrefs(context)
         val namespace = prefs.getString("deletion_namespace", null) ?: return
@@ -82,11 +82,7 @@ internal object KrillFrameCache {
         KrillPortraitHistory.clear(context)
         val store = KrillTokenStore(context.applicationContext)
         val session = store.load()
-        if (session?.cacheNamespace == namespace && session.pendingDeletion?.operation == operation) {
-            store.save(session.copy(cacheNamespace = UUID.randomUUID().toString(), pendingDeletion = null))
-        } else if (session != null && (session.cacheNamespace == namespace || session.pendingDeletion != null)) {
-            throw IOException("Deletion cleanup session changed")
-        }
+        if (session?.cacheNamespace == namespace) store.save(session.copy(cacheNamespace = UUID.randomUUID().toString()))
         if (!prefs
                 .edit()
                 .remove("deletion_namespace")
@@ -96,50 +92,6 @@ internal object KrillFrameCache {
             throw IOException("Unable to finish deletion cleanup")
         }
     }
-
-    /** Call off the main thread, after the server confirmed completion and the status lease is closed. */
-    fun cleanConfirmedDeletion(
-        context: Context,
-        namespace: String,
-        operation: String,
-    ) = withSessionReplacement {
-        synchronized(cleanupLock) {
-            recover(context)
-            check(!cleanupPending(context)) { "Private cache cleanup is pending" }
-            val session = KrillSessionManager(context).cachedSession() ?: throw IOException("Krill login required")
-            check(session.cacheNamespace == namespace && session.pendingDeletion?.operation == operation) {
-                "Krill deletion session changed"
-            }
-            if (!cleanupPrefs(context)
-                    .edit()
-                    .putString("deletion_namespace", namespace)
-                    .putString("deletion_operation", operation)
-                    .commit()
-            ) {
-                throw IOException("Unable to record deletion cleanup")
-            }
-            synchronized(this) { epoch++ }
-        }
-        fence.revoke(namespace)
-        invalidationListeners.notifyAllOrThrow()
-        if (!fence.awaitDrained(namespace, 30_000)) throw IOException("Private cache cleanup is still pending")
-        synchronized(cleanupLock) { finishDeletionCleanup(context) }
-    }
-
-    /** Retry a cleanup that was already authorized and recorded in this process. */
-    fun retryDeletionCleanup(context: Context): Boolean =
-        withSessionReplacement {
-            val namespace =
-                synchronized(cleanupLock) {
-                    recover(context)
-                    cleanupPrefs(context).getString("deletion_namespace", null)
-                } ?: return@withSessionReplacement false
-            fence.revoke(namespace)
-            invalidationListeners.notifyAllOrThrow()
-            if (!fence.awaitDrained(namespace, 30_000)) throw IOException("Private cache cleanup is still pending")
-            synchronized(cleanupLock) { finishDeletionCleanup(context) }
-            true
-        }
 
     fun addInvalidationListener(listener: () -> Unit) {
         invalidationListeners.add(listener)
@@ -187,7 +139,7 @@ internal object KrillFrameCache {
         synchronized(cleanupLock) {
             val session = KrillTokenStore(context.applicationContext).load() ?: return@synchronized false
             if (session.cacheNamespace != journal.namespace || session.libraryOrigin != journal.origin ||
-                session.spaceId != journal.space || session.pendingDeletion != null
+                session.spaceId != journal.space
             ) {
                 return@synchronized false
             }

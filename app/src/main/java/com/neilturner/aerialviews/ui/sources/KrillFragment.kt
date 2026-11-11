@@ -8,14 +8,12 @@ import androidx.lifecycle.lifecycleScope
 import androidx.preference.EditTextPreference
 import androidx.preference.Preference
 import com.neilturner.aerialviews.R
-import com.neilturner.aerialviews.providers.custom.KrillDeletionRequest
 import com.neilturner.aerialviews.providers.custom.KrillDeviceAuth
 import com.neilturner.aerialviews.providers.custom.KrillFrameCache
 import com.neilturner.aerialviews.providers.custom.KrillLoginAttempts
 import com.neilturner.aerialviews.providers.custom.KrillPrivateFeed
 import com.neilturner.aerialviews.providers.custom.KrillSessionManager
 import com.neilturner.aerialviews.providers.custom.KrillTokenStore
-import com.neilturner.aerialviews.providers.custom.deletionKrillClient
 import com.neilturner.aerialviews.ui.controls.MenuStateFragment
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -23,9 +21,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -55,62 +51,7 @@ class KrillFragment : MenuStateFragment() {
     ) {
         setPreferencesFromResource(R.xml.sources_krill, rootKey)
         findPreference<Preference>("krill_sign_in")?.setOnPreferenceClickListener {
-            startLogin(false)
-            true
-        }
-        findPreference<Preference>("krill_sign_in_delete")?.setOnPreferenceClickListener {
-            choiceDialog?.dismiss()
-            choiceDialog =
-                AlertDialog
-                    .Builder(requireContext())
-                    .setTitle(R.string.krill_sign_in_delete)
-                    .setMessage(R.string.krill_delete_permission_message)
-                    .setPositiveButton(android.R.string.ok) { _, _ -> startLogin(true) }
-                    .setNegativeButton(R.string.button_cancel, null)
-                    .show()
-            true
-        }
-        findPreference<Preference>("krill_cancel_pending")?.setOnPreferenceClickListener {
-            choiceDialog?.dismiss()
-            choiceDialog =
-                AlertDialog
-                    .Builder(requireContext())
-                    .setTitle(R.string.krill_cancel_pending)
-                    .setMessage(R.string.krill_cancel_pending_message)
-                    .setPositiveButton(android.R.string.ok) { _, _ ->
-                        lifecycleScope.launch {
-                            val context = requireContext().applicationContext
-                            try {
-                                val status =
-                                    withContext(Dispatchers.IO) {
-                                        val session = KrillSessionManager(context).cachedSession() ?: error("No Krill session")
-                                        val job = currentCoroutineContext()[Job]
-                                        val client = deletionKrillClient(job)
-                                        KrillDeletionRequest(
-                                            context,
-                                            client,
-                                        ) { job?.ensureActive() }.cancelUnaccepted(session.cacheNamespace)
-                                    }
-                                Toast
-                                    .makeText(
-                                        context,
-                                        if (status ==
-                                            "cancelled" || status == "expired"
-                                        ) {
-                                            R.string.krill_cancel_done
-                                        } else {
-                                            R.string.krill_cancel_accepted
-                                        },
-                                        Toast.LENGTH_LONG,
-                                    ).show()
-                            } catch (cancelled: CancellationException) {
-                                throw cancelled
-                            } catch (_: Exception) {
-                                Toast.makeText(context, R.string.krill_cancel_error, Toast.LENGTH_LONG).show()
-                            }
-                        }
-                    }.setNegativeButton(R.string.button_cancel, null)
-                    .show()
+            startLogin()
             true
         }
         findPreference<Preference>("krill_sign_out")?.setOnPreferenceClickListener {
@@ -142,18 +83,15 @@ class KrillFragment : MenuStateFragment() {
         }
     }
 
-    private fun startLogin(allowDeletion: Boolean) {
+    private fun startLogin() {
         val attempt = attempts.next()
         activeLoginAttempt = attempt
         choiceDialog?.dismiss()
         loginJob?.cancel()
-        loginJob = lifecycleScope.launch { signIn(attempt, allowDeletion) }
+        loginJob = lifecycleScope.launch { signIn(attempt) }
     }
 
-    private suspend fun signIn(
-        attempt: Long,
-        allowDeletion: Boolean,
-    ) {
+    private suspend fun signIn(attempt: Long) {
         val context = requireContext().applicationContext
         val origin =
             findPreference<EditTextPreference>("krill_library_origin")
@@ -166,7 +104,7 @@ class KrillFragment : MenuStateFragment() {
         try {
             val config = withContext(Dispatchers.IO) { KrillPrivateFeed.config(client, origin) }
             val auth = KrillDeviceAuth(client, config.issuer, config.clientId)
-            val device = withContext(Dispatchers.IO) { auth.start(allowDeletion) }
+            val device = withContext(Dispatchers.IO) { auth.start() }
             val deadline = SystemClock.elapsedRealtime() + device.expiresIn * 1000L
             dialog =
                 AlertDialog
